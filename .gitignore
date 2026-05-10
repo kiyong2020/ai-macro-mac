@@ -1,0 +1,5 @@
+DerivedData
+Pods
+AIMacro/Pods
+**/xcuserdata/
+.DS_Store
