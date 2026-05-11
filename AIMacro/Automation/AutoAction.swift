@@ -307,11 +307,9 @@ extension AutoAction {
     }
 }
 
-// MARK: - .click button (left/right)
+// MARK: - .click button + modifier flags
 
-/// Mouse button selection for `.click` actions, stored in `action.text`
-/// ("right" → right click; anything else, including legacy empty values, →
-/// left click).
+/// Mouse button selection for `.click` actions.
 enum ClickButton: String {
     case left
     case right
@@ -321,14 +319,84 @@ enum ClickButton: String {
     }
 }
 
+/// Full `.click` config — button + held modifier flags. Persisted into
+/// `action.text` as `"<button>|<modifiers>"`:
+///
+/// - `""`                → left click, no modifiers (legacy default)
+/// - `"right"`           → right click, no modifiers (legacy)
+/// - `"left|cmd"`        → ⌘-click
+/// - `"right|cmd,shift"` → ⇧⌘-right-click
+struct ClickConfig {
+    var button: ClickButton = .left
+    var modifiers: NSEvent.ModifierFlags = []
+
+    static func parse(_ raw: String) -> ClickConfig {
+        var cfg = ClickConfig()
+        let parts = raw.split(separator: "|", maxSplits: 1,
+                              omittingEmptySubsequences: false).map(String.init)
+        if !parts.isEmpty {
+            cfg.button = ClickButton.parse(parts[0])
+        }
+        if parts.count >= 2 {
+            for tok in parts[1].split(separator: ",") {
+                switch tok.lowercased() {
+                case "cmd", "command":       cfg.modifiers.insert(.command)
+                case "shift":                cfg.modifiers.insert(.shift)
+                case "ctrl", "control":      cfg.modifiers.insert(.control)
+                case "opt", "option", "alt": cfg.modifiers.insert(.option)
+                default: break
+                }
+            }
+        }
+        return cfg
+    }
+
+    func encode() -> String {
+        var mods: [String] = []
+        if modifiers.contains(.command) { mods.append("cmd") }
+        if modifiers.contains(.shift)   { mods.append("shift") }
+        if modifiers.contains(.control) { mods.append("ctrl") }
+        if modifiers.contains(.option)  { mods.append("opt") }
+        if mods.isEmpty {
+            // Keep legacy form: empty string for default left click, plain
+            // "right" for right click.
+            return button == .left ? "" : button.rawValue
+        }
+        return "\(button.rawValue)|\(mods.joined(separator: ","))"
+    }
+}
+
 extension AutoAction {
+    /// Full click config (button + modifiers) for `.click` actions.
+    var clickConfig: ClickConfig {
+        ClickConfig.parse((try? text.value()) ?? "")
+    }
+
+    func setClickConfig(_ cfg: ClickConfig) {
+        text.onNext(cfg.encode())
+    }
+
     /// Mouse button for `.click` actions. Defaults to `.left` for legacy
-    /// rows where `text` is empty.
+    /// rows where `text` is empty. Preserves the modifier slot.
     var clickButton: ClickButton {
-        ClickButton.parse((try? text.value()) ?? "")
+        clickConfig.button
     }
 
     func setClickButton(_ button: ClickButton) {
-        text.onNext(button.rawValue)
+        var cfg = clickConfig
+        cfg.button = button
+        setClickConfig(cfg)
+    }
+
+    /// Toggle a single modifier flag without disturbing the button or other
+    /// modifier bits.
+    func setClickModifier(_ flag: NSEvent.ModifierFlags, on: Bool) {
+        var cfg = clickConfig
+        if on {
+            cfg.modifiers.insert(flag)
+        } else {
+            cfg.modifiers.remove(flag)
+        }
+        setClickConfig(cfg)
     }
 }

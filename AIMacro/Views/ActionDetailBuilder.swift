@@ -172,6 +172,9 @@ final class ActionDetailBuilder {
             card.addRow(label: "버튼",
                         control: makeClickButtonControl(action, disposeBag: disposeBag),
                         hint: "좌클릭 / 우클릭 선택")
+            card.addRow(label: "수정자",
+                        control: makeClickModifiersControl(action, disposeBag: disposeBag),
+                        hint: "클릭 시 함께 누를 키 (⌘ ⇧ ⌃ ⌥)")
             card.addRow(label: "반복", control: makeCountField(action, disposeBag: disposeBag, suffix: "회"))
             card.addRow(label: "미리보기",
                         control: makeActionSnapshotView(action, disposeBag: disposeBag),
@@ -365,6 +368,44 @@ final class ActionDetailBuilder {
     }
 
     private static var clickButtonBridgeAssocKey: UInt8 = 0
+
+    /// 4-up checkbox row for `.click` action modifier keys (⌘ ⇧ ⌃ ⌥).
+    /// Each toggle flips one bit of `action.clickConfig.modifiers`, leaving
+    /// the button slot and the other modifiers untouched.
+    private func makeClickModifiersControl(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
+        let entries: [(label: String, flag: NSEvent.ModifierFlags)] = [
+            ("⌘", .command),
+            ("⇧", .shift),
+            ("⌃", .control),
+            ("⌥", .option),
+        ]
+        let current = action.clickConfig.modifiers
+
+        let bridges = entries.map { entry -> ClickModifierBridge in
+            let checkbox = NSButton(checkboxWithTitle: entry.label,
+                                    target: nil, action: nil)
+            checkbox.state = current.contains(entry.flag) ? .on : .off
+            checkbox.translatesAutoresizingMaskIntoConstraints = false
+            let bridge = ClickModifierBridge(action: action,
+                                             flag: entry.flag,
+                                             checkbox: checkbox)
+            checkbox.target = bridge
+            checkbox.action = #selector(ClickModifierBridge.toggled)
+            return bridge
+        }
+
+        let row = NSStackView(views: bridges.map { $0.checkbox })
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+
+        // Keep the bridges alive for the row's lifetime.
+        objc_setAssociatedObject(row, &Self.clickModifierBridgesAssocKey,
+                                 bridges, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        return row
+    }
+
+    private static var clickModifierBridgesAssocKey: UInt8 = 0
 
     private func makeTextField(_ action: AutoAction, disposeBag: DisposeBag, placeholder: String) -> NSView {
         let field = NSTextField(string: (try? action.text.value()) ?? "")
@@ -1598,6 +1639,25 @@ private final class ClickButtonBridge: NSObject {
 
     @objc func changed(_ sender: NSSegmentedControl) {
         action?.setClickButton(sender.selectedSegment == 1 ? .right : .left)
+    }
+}
+
+/// `target/action` shim for one of the `.click` modifier checkboxes
+/// (⌘ ⇧ ⌃ ⌥). Translates checkbox state into a single-bit update on
+/// `action.clickConfig.modifiers` via `setClickModifier`.
+private final class ClickModifierBridge: NSObject {
+    private weak var action: AutoAction?
+    let flag: NSEvent.ModifierFlags
+    let checkbox: NSButton
+
+    init(action: AutoAction, flag: NSEvent.ModifierFlags, checkbox: NSButton) {
+        self.action = action
+        self.flag = flag
+        self.checkbox = checkbox
+    }
+
+    @objc func toggled() {
+        action?.setClickModifier(flag, on: checkbox.state == .on)
     }
 }
 

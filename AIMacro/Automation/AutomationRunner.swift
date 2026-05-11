@@ -114,11 +114,11 @@ final class AutomationRunner {
     private func runClick(_ action: AutoAction) async throws {
         let count = try! action.count.value()
         let point = try! action.point.value()
-        let button = action.clickButton
+        let cfg = action.clickConfig
         for i in 0 ..< count {
-            switch button {
-            case .left:  await click(at: point)
-            case .right: await rightClick(at: point)
+            switch cfg.button {
+            case .left:  await click(at: point, modifiers: cfg.modifiers)
+            case .right: await rightClick(at: point, modifiers: cfg.modifiers)
             }
             if i < count - 1 {
                 try await Task.sleep(for: .milliseconds(100))

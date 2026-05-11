@@ -21,9 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // before any storage singleton (ScenarioStore/ActionStore/OCRSnapshotStore)
         // touches the new path. Must run first.
         Self.migrateLegacyAppSupportIfNeeded()
-        requestAccessibilityPermission()
-        requestScreenCapturePermission()
-        requestAppleEventsPermission()
+        Permissions.requestAll()
         wirePreferencesMenu()
         setupGlobalObservers()
         setupStatusItem()
@@ -135,29 +133,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         SettingsWindowController.shared.present()
     }
 
-    private func requestAccessibilityPermission() {
-        // Passing true to kAXTrustedCheckOptionPrompt makes macOS show its own
-        // system dialog when permission is missing — that's the only prompt we
-        // want, so don't stack an extra NSAlert on top.
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
-    }
-
-    private func requestScreenCapturePermission() {
-        // CGPreflightScreenCaptureAccess() returns the cached TCC state without
-        // prompting; CGRequestScreenCaptureAccess() adds the app to the system
-        // settings list and shows the system prompt the first time it's called.
-        if !CGPreflightScreenCaptureAccess() {
-            CGRequestScreenCaptureAccess()
-        }
-    }
-
-    private func requestAppleEventsPermission() {
-        // Trigger Apple Events permission for Chrome automation (setChromeURL)
-        let script = NSAppleScript(source: "tell application \"System Events\" to return name of processes")
-        script?.compileAndReturnError(nil)
-    }
-    
     func applicationWillTerminate(_ aNotification: Notification) {
         // Insert code here to tear down your application
     }

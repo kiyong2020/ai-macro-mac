@@ -14,36 +14,80 @@ func mouseLocation() -> CGPoint {
     return NSEvent.mouseLocation
 }
 
-func click(at point: CGPoint) async {
+func click(at point: CGPoint, modifiers: NSEvent.ModifierFlags = []) async {
+    await performClick(at: point,
+                       button: .left,
+                       downType: .leftMouseDown,
+                       upType: .leftMouseUp,
+                       modifiers: modifiers)
+}
+
+func rightClick(at point: CGPoint, modifiers: NSEvent.ModifierFlags = []) async {
+    await performClick(at: point,
+                       button: .right,
+                       downType: .rightMouseDown,
+                       upType: .rightMouseUp,
+                       modifiers: modifiers)
+}
+
+/// Synthesises a mouse click with optional Cmd / Shift / Ctrl / Opt held
+/// across the down/up pair. Attaches the modifier mask to the CGEvent
+/// `.flags` *and* presses the actual modifier keys around the click, so
+/// both event-flag readers (browsers) and keyboard-state readers (some
+/// AppKit controls) see the chord.
+private func performClick(at point: CGPoint,
+                          button: CGMouseButton,
+                          downType: CGEventType,
+                          upType: CGEventType,
+                          modifiers: NSEvent.ModifierFlags) async {
     await simulateMouseMove(to: point)
     let source = CGEventSource(stateID: .hidSystemState)
-    let mouseDown = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)
-    let mouseUp   = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp,   mouseCursorPosition: point, mouseButton: .left)
+    let flags = cgEventFlags(from: modifiers)
+
+    // Hold the modifier keys around the click for apps that inspect actual
+    // key state instead of (or in addition to) event flags.
+    let modKeys = modifierKeyCodes(for: modifiers)
+    for code in modKeys {
+        let down = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true)
+        down?.flags = flags
+        down?.post(tap: .cghidEventTap)
+    }
+
+    let mouseDown = CGEvent(mouseEventSource: source, mouseType: downType,
+                            mouseCursorPosition: point, mouseButton: button)
+    let mouseUp   = CGEvent(mouseEventSource: source, mouseType: upType,
+                            mouseCursorPosition: point, mouseButton: button)
     // Mark the down/up pair as a single click — required for apps that
     // distinguish a real click from a stray mouseDown/mouseUp, including
     // Chrome's native JavaScript confirm dialog (otherwise the synthetic
     // click reaches the right coordinates but the button never activates).
     mouseDown?.setIntegerValueField(.mouseEventClickState, value: 1)
     mouseUp?.setIntegerValueField(.mouseEventClickState, value: 1)
+    mouseDown?.flags = flags
+    mouseUp?.flags = flags
     mouseDown?.post(tap: .cghidEventTap)
-    // Right-skewed click hold: most clicks ~15–25 ms, occasional longer.
-    // pow(u, 2) biases toward 0; adds 0–33 ms on top of 12 ms baseline.
+    // Right-skewed click hold: most clicks ~15-25 ms, occasional longer.
+    // pow(u, 2) biases toward 0; adds 0-33 ms on top of 12 ms baseline.
     let holdMs = 12 + Int(pow(Double.random(in: 0...1), 2.0) * 33)
     try? await Task.sleep(for: .milliseconds(holdMs))
     mouseUp?.post(tap: .cghidEventTap)
+
+    // Release modifier keys in reverse order.
+    for code in modKeys.reversed() {
+        let up = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false)
+        up?.post(tap: .cghidEventTap)
+    }
 }
 
-func rightClick(at point: CGPoint) async {
-    await simulateMouseMove(to: point)
-    let source = CGEventSource(stateID: .hidSystemState)
-    let mouseDown = CGEvent(mouseEventSource: source, mouseType: .rightMouseDown, mouseCursorPosition: point, mouseButton: .right)
-    let mouseUp   = CGEvent(mouseEventSource: source, mouseType: .rightMouseUp,   mouseCursorPosition: point, mouseButton: .right)
-    mouseDown?.setIntegerValueField(.mouseEventClickState, value: 1)
-    mouseUp?.setIntegerValueField(.mouseEventClickState, value: 1)
-    mouseDown?.post(tap: .cghidEventTap)
-    let holdMs = 12 + Int(pow(Double.random(in: 0...1), 2.0) * 33)
-    try? await Task.sleep(for: .milliseconds(holdMs))
-    mouseUp?.post(tap: .cghidEventTap)
+/// Virtual key codes for the modifier keys present in `m`. Order is fixed
+/// so press / release happens deterministically.
+private func modifierKeyCodes(for m: NSEvent.ModifierFlags) -> [CGKeyCode] {
+    var codes: [CGKeyCode] = []
+    if m.contains(.command) { codes.append(0x37) }   // Left Command
+    if m.contains(.shift)   { codes.append(0x38) }   // Left Shift
+    if m.contains(.option)  { codes.append(0x3A) }   // Left Option
+    if m.contains(.control) { codes.append(0x3B) }   // Left Control
+    return codes
 }
 
 /// Last simulated cursor position in Quartz coords. Tracked across calls so each move

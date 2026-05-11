@@ -10,7 +10,7 @@ class SettingsWindowController: NSWindowController {
     static let shared: SettingsWindowController = {
         let vc = SettingsViewController()
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 120),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 150),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -35,9 +35,10 @@ class SettingsViewController: NSViewController, NSTextFieldDelegate {
     private var disposeBag = DisposeBag()
 
     private let randomDelayField = NSTextField()
+    private let permissionButton = NSButton()
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 120))
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 150))
         view.wantsLayer = true
     }
 
@@ -53,16 +54,16 @@ class SettingsViewController: NSViewController, NSTextFieldDelegate {
         let fieldW: CGFloat = 240
         let rowH: CGFloat = 22
 
-        func addRow(title: String, field: NSView, y: CGFloat) {
+        func addRow(title: String, field: NSView, y: CGFloat, height: CGFloat = 22) {
             let lbl = NSTextField(labelWithString: title)
             lbl.frame = NSRect(x: 16, y: y, width: colX - 4, height: rowH)
             lbl.alignment = .right
-            field.frame = NSRect(x: colX + 16, y: y, width: fieldW, height: rowH)
+            field.frame = NSRect(x: colX + 16, y: y, width: fieldW, height: height)
             view.addSubview(lbl)
             view.addSubview(field)
         }
 
-        let y = view.frame.height - 44
+        var y = view.frame.height - 44
 
         // Random-delay max (seconds, double). 0 disables the jitter. We parse
         // manually in controlTextDidChange — attaching a NumberFormatter to the
@@ -71,6 +72,16 @@ class SettingsViewController: NSViewController, NSTextFieldDelegate {
         randomDelayField.placeholderString = "0.0"
         randomDelayField.alignment = .right
         addRow(title: "랜덤 딜레이 최대(초):", field: randomDelayField, y: y)
+        y -= 36
+
+        // Permission request button — re-triggers the three TCC prompts so
+        // the user can re-grant access without restarting the app.
+        permissionButton.title = "권한 요청"
+        permissionButton.bezelStyle = .rounded
+        permissionButton.target = self
+        permissionButton.action = #selector(onRequestPermissions)
+        permissionButton.toolTip = "손쉬운 사용 / 화면 기록 / Apple Events 권한을 한 번에 요청합니다."
+        addRow(title: "시스템 권한:", field: permissionButton, y: y, height: 28)
     }
 
     func controlTextDidChange(_ obj: Notification) {
@@ -78,5 +89,10 @@ class SettingsViewController: NSViewController, NSTextFieldDelegate {
         if field === randomDelayField {
             Preferences.maxRandomDelay = Double(field.stringValue) ?? 0
         }
+    }
+
+    @objc private func onRequestPermissions() {
+        Permissions.requestAll()
+        AppLogger.shared.log("🔐 시스템 권한 재요청")
     }
 }
