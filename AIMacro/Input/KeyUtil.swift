@@ -116,8 +116,15 @@ private func simulateMouseMove(to target: CGPoint) async {
         CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: pos, mouseButton: .left)?
             .post(tap: .cghidEventTap)
 
-        let delay = Int.random(in: 2...5)
-        try? await Task.sleep(for: .milliseconds(delay))
+        // Slow down as the cursor closes on the target. Inter-step delay
+        // grows quadratically with progress (`t`), so the first few steps
+        // fly past (~2–5 ms) while the last one or two pause noticeably
+        // (~20+ ms) — combined with smoothstep's already-small spatial
+        // deltas near t=1, this reads as natural deceleration.
+        let baseDelay = 2
+        let deceleration = Int(t * t * 18)
+        let jitter = Int.random(in: 0...3)
+        try? await Task.sleep(for: .milliseconds(baseDelay + deceleration + jitter))
     }
 
     lastSimulatedPosition = target
