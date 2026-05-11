@@ -2,8 +2,7 @@
 //  Preferences.swift
 //  AIMacro
 //
-//  Lightweight persisted user preferences. UserDefaults-backed, mirroring the
-//  pattern used in SocketService for serverURL/userName.
+//  Lightweight persisted user preferences. UserDefaults-backed.
 //
 
 import Foundation

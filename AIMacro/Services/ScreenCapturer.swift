@@ -153,13 +153,23 @@ class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
                           width: Int(rectWidth),
                           height: Int(rectHeight)).integral
 
-        let context = CGContext(data: nil,
-                                width: Int(rect.width),
-                                height: Int(rect.height),
-                                bitsPerComponent: 8,
-                                bytesPerRow: Int(rect.width) * 4,
-                                space: CGColorSpaceCreateDeviceRGB(),
-                                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue)!
+        // Drop frames whose target rect collapsed to zero in either dimension
+        // — happens transiently when the cursor crosses a display boundary or
+        // when a captureRect is clamped against a screen edge with no overlap.
+        // CGContext init returns nil for non-positive width/height; force-
+        // unwrapping there used to crash the app.
+        guard rect.width > 0, rect.height > 0,
+              let context = CGContext(data: nil,
+                                      width: Int(rect.width),
+                                      height: Int(rect.height),
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: Int(rect.width) * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue)
+        else {
+            CVPixelBufferUnlockBaseAddress(buffer, .readOnly)
+            return
+        }
 
         // Clamp the source read per row. Without this, a rect that extends
         // past the buffer's right edge keeps copying `rect.width * 4` bytes,

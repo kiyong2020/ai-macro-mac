@@ -12,10 +12,6 @@ class Constants {
     /// and the on-screen position-picker preview.
     static let ocrCaptureSize: CGFloat = 200
 
-    /// Default Socket.IO server URL — used when no value has been saved
-    /// to UserDefaults yet, and as the placeholder in the settings field.
-    static let defaultServerURL = "http://mini.minseye.co.kr:3012"
-
     /// When false, the floating OCR debug window (live captured frame +
     /// recognised text list) is suppressed for both the position picker and
     /// macro execution. Useful for production runs where the debug overlay
@@ -41,7 +37,6 @@ class Constants {
         .init(type: .click, group: "seonam", name: "인증번호발송", point: .zero, delay: 1),
         .init(type: .key, group: "seonam", name: "팝업1", delay: 0.2, text: ":enter"),
         .init(type: .click, group: "seonam", name: "인증번호입력", point: .zero, delay: 0.01, count: 2),
-        .init(type: .wait(type: .code), group: "seonam", name: "인증코드수신"),
         .init(type: .click, group: "seonam", name: "인증확인", point: .zero, delay: 0.1),
          .init(type: .key, group: "seonam", name: "스크롤3(space)", delay: 0.4, count: 3, text: ":space"),
         .init(type: .click, group: "seonam", name: "전체동의", point: .zero, delay: 0.1),
@@ -62,7 +57,6 @@ class Constants {
         .init(type: .click, group: "seonam", name: "인증번호발송", point: .zero, delay: 1),
         .init(type: .key, group: "seonam", name: "팝업1", delay: 0.2, text: ":enter"),
         .init(type: .click, group: "seonam", name: "인증번호입력", point: .zero, delay: 0.01, count: 2),
-        .init(type: .wait(type: .code), group: "seonam", name: "인증코드수신"),
         .init(type: .click, group: "seonam", name: "인증확인", point: .zero, delay: 0.1),
          .init(type: .key, group: "seonam", name: "스크롤3(space)", delay: 0.4, count: 3, text: ":space"),
         .init(type: .click, group: "seonam", name: "전체동의", point: .zero, delay: 0.1),
@@ -97,7 +91,6 @@ class Constants {
         .init(type: .click, group: "seonam", name: "인증번호발송", point: .zero, delay: 1),
         .init(type: .key, group: "seonam", name: "팝업1", delay: 0.2, text: ":enter"),
         .init(type: .click, group: "seonam", name: "인증번호입력", point: .zero, delay: 0.01, count: 2),
-        .init(type: .wait(type: .code), group: "seonam", name: "인증코드수신"),
         .init(type: .click, group: "seonam", name: "인증확인", point: .zero, delay: 0.1),
         .init(type: .click, group: "seonam", name: "배경2", point: .zero, delay: 0.01),
         .init(type: .key, group: "seonam", name: "스크롤3(space)", delay: 0.4, count: 3, text: ":space"),

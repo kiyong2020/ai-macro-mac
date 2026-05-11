@@ -116,15 +116,29 @@ final class ActionDetailBuilder {
 
         // Action type pill — primary text in the header now (action name has
         // been removed since it's already shown in the sidebar list).
-        let typeTag = NSTextField(labelWithString: "  \(ActionIcons.label(for: action.type))  ")
-        typeTag.font = .systemFont(ofSize: 11)
-        typeTag.textColor = .secondaryLabelColor
+        // Wrap the label in a container so we get real horizontal *and*
+        // vertical padding (NSTextField's whitespace-based padding only adds
+        // horizontal width, not height).
+        let typeLabel = NSTextField(labelWithString: ActionIcons.label(for: action.type))
+        typeLabel.font = .systemFont(ofSize: 11)
+        typeLabel.textColor = .secondaryLabelColor
+        typeLabel.cell?.lineBreakMode = .byClipping
+        typeLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let typeTag = NSView()
         typeTag.wantsLayer = true
         typeTag.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         typeTag.layer?.cornerRadius = 10
         typeTag.layer?.borderWidth = 1
         typeTag.layer?.borderColor = NSColor.separatorColor.cgColor
-        typeTag.cell?.lineBreakMode = .byClipping
+        typeTag.translatesAutoresizingMaskIntoConstraints = false
+        typeTag.addSubview(typeLabel)
+        NSLayoutConstraint.activate([
+            typeLabel.leadingAnchor.constraint(equalTo: typeTag.leadingAnchor, constant: 10),
+            typeLabel.trailingAnchor.constraint(equalTo: typeTag.trailingAnchor, constant: -10),
+            typeLabel.topAnchor.constraint(equalTo: typeTag.topAnchor, constant: 4),
+            typeLabel.bottomAnchor.constraint(equalTo: typeTag.bottomAnchor, constant: -4),
+        ])
         typeTag.setContentHuggingPriority(.required, for: .horizontal)
 
         let row = NSStackView(views: [iconHost, typeTag])
@@ -155,7 +169,13 @@ final class ActionDetailBuilder {
             let card = makeCard(title: "클릭 위치")
             card.addRow(label: "좌표", control: makePointPicker(action, disposeBag: disposeBag),
                         hint: "버튼을 누르고 화면에서 위치를 클릭")
+            card.addRow(label: "버튼",
+                        control: makeClickButtonControl(action, disposeBag: disposeBag),
+                        hint: "좌클릭 / 우클릭 선택")
             card.addRow(label: "반복", control: makeCountField(action, disposeBag: disposeBag, suffix: "회"))
+            card.addRow(label: "미리보기",
+                        control: makeActionSnapshotView(action, disposeBag: disposeBag),
+                        hint: "위치 지정 직후 캡처된 클릭 영역")
             cards.append(card)
 
         case .scroll:
@@ -173,7 +193,7 @@ final class ActionDetailBuilder {
             card.addRow(label: "반복", control: makeCountField(action, disposeBag: disposeBag, suffix: "회"))
             cards.append(card)
 
-        case .wait(.click), .wait(.enter), .wait(.code):
+        case .wait(.click), .wait(.enter):
             let card = makeCard(title: "대기")
             card.addRow(label: "타입", control: NSTextField(labelWithString: waitDescription(action.type)))
             cards.append(card)
@@ -197,7 +217,7 @@ final class ActionDetailBuilder {
                         control: makeScanSizeControl(action, disposeBag: disposeBag),
                         hint: "타겟 좌표를 중심으로 한 정사각형 캡처 영역 (50–600 px)")
             card.addRow(label: "미리보기",
-                        control: makeOCRSnapshotView(action, disposeBag: disposeBag),
+                        control: makeActionSnapshotView(action, disposeBag: disposeBag),
                         hint: "위치 지정 직후 캡처된 스캔 영역")
             cards.append(card)
 
@@ -222,11 +242,37 @@ final class ActionDetailBuilder {
                                                placeholder: "https://..."))
             cards.append(card)
 
+        case .openBrowser:
+            let card = makeCard(title: "브라우저")
+            seedBrowserDefaults(action)
+            card.addRow(label: "URL",
+                        control: makeBrowserURLField(action, disposeBag: disposeBag,
+                                                     placeholder: "https://..."),
+                        hint: "디폴트 브라우저로 열림 (Chrome / Safari / Edge 등)")
+            card.addRow(label: "너비",
+                        control: makeBrowserSizeControl(action, axis: .width,
+                                                        disposeBag: disposeBag),
+                        hint: "창 너비 (px)")
+            card.addRow(label: "높이",
+                        control: makeBrowserSizeControl(action, axis: .height,
+                                                        disposeBag: disposeBag),
+                        hint: "창 높이 (px)")
+            card.addRow(label: "위치",
+                        control: makeBrowserPositionPicker(action, disposeBag: disposeBag),
+                        hint: "버튼을 누르고 화면에서 창 중심이 될 위치를 클릭")
+            card.addRow(label: "미리보기",
+                        control: makeActionSnapshotView(action, disposeBag: disposeBag),
+                        hint: "위치 지정 직후 캡처된 창 영역")
+            cards.append(card)
+
         case .windowFrame:
             let card = makeCard(title: "창 프레임")
             card.addRow(label: "저장된 프레임",
                         control: makeWindowFrameRow(action, disposeBag: disposeBag),
                         hint: "x, y, width, height")
+            card.addRow(label: "미리보기",
+                        control: makeActionSnapshotView(action, disposeBag: disposeBag),
+                        hint: "윈도우 선택 직후 캡처된 영역")
             cards.append(card)
         }
 
@@ -244,7 +290,6 @@ final class ActionDetailBuilder {
         switch type {
         case .wait(.click): return "사용자가 마우스 클릭할 때까지 일시정지"
         case .wait(.enter): return "사용자가 엔터 키를 누를 때까지 일시정지"
-        case .wait(.code):  return "외부에서 인증코드를 수신할 때까지 일시정지"
         default:            return ""
         }
     }
@@ -300,6 +345,27 @@ final class ActionDetailBuilder {
         return row
     }
 
+    /// 좌/우 mouse button selector for `.click` actions. Persists the choice
+    /// in `action.text` via `setClickButton`.
+    private func makeClickButtonControl(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
+        let segmented = NSSegmentedControl(labels: ["좌", "우"],
+                                           trackingMode: .selectOne,
+                                           target: nil,
+                                           action: nil)
+        segmented.selectedSegment = action.clickButton == .right ? 1 : 0
+        segmented.translatesAutoresizingMaskIntoConstraints = false
+        segmented.widthAnchor.constraint(equalToConstant: 110).isActive = true
+
+        let bridge = ClickButtonBridge(action: action)
+        segmented.target = bridge
+        segmented.action = #selector(ClickButtonBridge.changed(_:))
+        objc_setAssociatedObject(segmented, &Self.clickButtonBridgeAssocKey,
+                                 bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        return segmented
+    }
+
+    private static var clickButtonBridgeAssocKey: UInt8 = 0
+
     private func makeTextField(_ action: AutoAction, disposeBag: DisposeBag, placeholder: String) -> NSView {
         let field = NSTextField(string: (try? action.text.value()) ?? "")
         field.placeholderString = placeholder
@@ -307,6 +373,178 @@ final class ActionDetailBuilder {
         field.translatesAutoresizingMaskIntoConstraints = false
         field.delegate = TextFieldChangeDelegate.attach(to: field) { [weak action] new in
             action?.text.onNext(new)
+        }
+        return field
+    }
+
+    /// Initialize a `.openBrowser` action's `text` so subsequent UI bindings
+    /// have something concrete to render. Pre-fills the URL slot from the
+    /// enum payload (if the user hasn't edited yet) and seeds a default
+    /// 1024×768 window frame so the position-picker preview has a size to
+    /// draw before any explicit user input.
+    private func seedBrowserDefaults(_ action: AutoAction) {
+        let raw = (try? action.text.value()) ?? ""
+        let parsed = OpenBrowserPayload.parse(raw)
+        let url: String
+        if parsed.url.isEmpty, let seed = action.type.defaultURL, !seed.isEmpty {
+            url = seed
+        } else {
+            url = parsed.url
+        }
+        let frame: String
+        if parsed.frame.isEmpty {
+            frame = WindowFrameUtil.encode(CGRect(x: 0, y: 0, width: 1024, height: 768))
+        } else {
+            frame = parsed.frame
+        }
+        let seeded = OpenBrowserPayload.encode(url: url, frame: frame)
+        if seeded != raw { action.text.onNext(seeded) }
+    }
+
+    /// Slider + number field pair for one axis of the `.openBrowser` window
+    /// size. Mirrors the OCR scan-area control's layout but writes into the
+    /// frame's width or height (200…3000 px). Updating the axis preserves the
+    /// other axis, the origin, and the URL.
+    private func makeBrowserSizeControl(_ action: AutoAction,
+                                        axis: BrowserSizeAxis,
+                                        disposeBag: DisposeBag) -> NSView {
+        let initial = axis == .width ? Int(action.browserFrame.width)
+                                     : Int(action.browserFrame.height)
+        let displayInitial = max(200, min(3000, initial == 0
+                                          ? (axis == .width ? 1024 : 768)
+                                          : initial))
+
+        let slider = NSSlider(value: Double(displayInitial),
+                              minValue: 200,
+                              maxValue: 3000,
+                              target: nil,
+                              action: nil)
+        slider.numberOfTickMarks = (3000 - 200) / 50 + 1
+        slider.allowsTickMarkValuesOnly = true
+        slider.translatesAutoresizingMaskIntoConstraints = false
+        slider.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+
+        let field = NSTextField(string: "\(displayInitial)")
+        field.alignment = .right
+        field.bezelStyle = .roundedBezel
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: 60).isActive = true
+
+        let unit = NSTextField(labelWithString: "px")
+        unit.font = .systemFont(ofSize: 11)
+        unit.textColor = .tertiaryLabelColor
+
+        let state = BrowserSizeState(action: action, axis: axis, slider: slider, field: field)
+        slider.target = state
+        slider.action = #selector(BrowserSizeState.sliderChanged)
+        field.delegate = TextFieldChangeDelegate.attach(to: field) { [weak state] _ in
+            state?.fieldChanged()
+        }
+        objc_setAssociatedObject(field, &Self.browserSizeStateAssocKey,
+                                 state, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        let row = NSStackView(views: [slider, field, unit])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+        return row
+    }
+
+    private static var browserSizeStateAssocKey: UInt8 = 0
+
+    /// Position picker for `.openBrowser`. Pressing the button shows the
+    /// floating `ScanPreviewPanel` sized to the action's current width×height,
+    /// follows the cursor, then on click stores the frame whose CENTER is
+    /// the click point (cursor is at the center of the visual rect, matching
+    /// the OCR position picker).
+    private func makeBrowserPositionPicker(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
+        let display = NSTextField(labelWithString: "")
+        display.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        display.wantsLayer = true
+        display.layer?.borderWidth = 1
+        display.layer?.borderColor = NSColor.separatorColor.cgColor
+        display.layer?.cornerRadius = 6
+        display.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
+        display.translatesAutoresizingMaskIntoConstraints = false
+        display.heightAnchor.constraint(equalToConstant: 22).isActive = true
+
+        action.text
+            .observe(on: MainScheduler.instance)
+            .subscribe(onNext: { [weak action] _ in
+                guard let action = action else { return }
+                let f = action.browserFrame
+                if f == .zero || (f.width == 0 && f.height == 0) {
+                    display.stringValue = "  (미설정)"
+                } else {
+                    display.stringValue = "  중심 (\(Int(f.midX)), \(Int(f.midY)))"
+                }
+            })
+            .disposed(by: disposeBag)
+
+        let pickButton = NSButton(title: "📍 위치 선택", target: self,
+                                  action: #selector(pickBrowserPosition(_:)))
+        pickButton.bezelStyle = .roundRect
+        pickButton.controlSize = .small
+        objc_setAssociatedObject(pickButton, &Self.actionAssocKey,
+                                 action, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        let row = NSStackView(views: [display, pickButton])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+        display.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return row
+    }
+
+    @objc private func pickBrowserPosition(_ sender: NSButton) {
+        guard let action = objc_getAssociatedObject(sender, &Self.actionAssocKey) as? AutoAction else { return }
+        let cur = action.browserFrame
+        let size = CGSize(width: max(50, cur.width == 0 ? 1024 : cur.width),
+                          height: max(50, cur.height == 0 ? 768 : cur.height))
+
+        Self.armPickerVisuals(button: sender, display: nil, active: true, pushCursor: false)
+        ScanPreviewPanel.shared.show(rectSize: size)
+
+        let captureSession = PickerCaptureSession(size: size)
+        captureSession.start()
+
+        mouseListener.consumesAllClicks = true
+        mouseListener.onMouseDown = { [weak self] (point, _) in
+            guard let self = self else { return }
+            self.mouseListener.stop()
+            self.mouseListener.consumesAllClicks = false
+            Self.armPickerVisuals(button: sender, display: nil, active: false, pushCursor: false)
+            if let img = captureSession.stop() {
+                OCRSnapshotStore.shared.save(img, actionId: action.id)
+            }
+            DispatchQueue.main.async { ScanPreviewPanel.shared.hide() }
+
+            // `point` is in Quartz screen coords (Y-down) — same coord
+            // system AX uses for window position, so the saved origin maps
+            // directly when the runner applies the frame.
+            let origin = CGPoint(x: point.x - size.width / 2,
+                                 y: point.y - size.height / 2)
+            let newFrame = CGRect(origin: origin, size: size)
+            action.setBrowserFrame(newFrame)
+            AppLogger.shared.log("🪟 위치 선택: \(WindowFrameUtil.encode(newFrame))")
+        }
+        mouseListener.start()
+    }
+
+    /// URL field for `.openBrowser` — reads/writes only the URL half of the
+    /// pipe-delimited `<url>|<frame>` payload so the frame slot survives
+    /// edits.
+    private func makeBrowserURLField(_ action: AutoAction, disposeBag: DisposeBag, placeholder: String) -> NSView {
+        let raw = (try? action.text.value()) ?? ""
+        let initial = OpenBrowserPayload.parse(raw).url
+        let field = NSTextField(string: initial)
+        field.placeholderString = placeholder
+        field.bezelStyle = .roundedBezel
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.delegate = TextFieldChangeDelegate.attach(to: field) { [weak action] new in
+            guard let action = action else { return }
+            let cur = OpenBrowserPayload.parse((try? action.text.value()) ?? "")
+            action.text.onNext(OpenBrowserPayload.encode(url: new, frame: cur.frame))
         }
         return field
     }
@@ -353,9 +591,12 @@ final class ActionDetailBuilder {
     }
 
     /// Snapshot thumbnail showing what was captured at the moment the user
-    /// committed the OCR position. Loads from `OCRSnapshotStore` and
-    /// auto-refreshes via `.ocrSnapshotChanged` notifications.
-    private func makeOCRSnapshotView(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
+    /// committed a position-pick (OCR / click / browser / window-frame).
+    /// Loads from `OCRSnapshotStore` and auto-refreshes via the
+    /// `.ocrSnapshotChanged` notification — the store name predates the
+    /// generalisation but the file format is action-id-keyed PNG, agnostic
+    /// to action type.
+    private func makeActionSnapshotView(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
         let imageView = NSImageView()
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.imageAlignment = .alignCenter
@@ -595,9 +836,13 @@ final class ActionDetailBuilder {
         display.translatesAutoresizingMaskIntoConstraints = false
         display.heightAnchor.constraint(equalToConstant: 22).isActive = true
 
+        // Re-render whenever the underlying text changes — `encodedFrame`
+        // hides whether the action stores frame directly (`text`) or in the
+        // pipe-delimited `.openBrowser` payload.
         action.text
             .observe(on: MainScheduler.instance)
-            .subscribe(onNext: { s in
+            .subscribe(onNext: { [weak action] _ in
+                let s = action?.encodedFrame ?? ""
                 display.stringValue = s.isEmpty ? "  (미설정)" : "  \(s)"
             })
             .disposed(by: disposeBag)
@@ -731,7 +976,20 @@ final class ActionDetailBuilder {
     @objc private func pickPoint(_ sender: NSButton) {
         guard let action = objc_getAssociatedObject(sender, &Self.actionAssocKey) as? AutoAction else { return }
         let display = objc_getAssociatedObject(sender, &Self.displayAssocKey) as? NSTextField
-        Self.armPickerVisuals(button: sender, display: display, active: true)
+        Self.armPickerVisuals(button: sender, display: display, active: true, pushCursor: false)
+
+        // Small floating box centered on the cursor — same overlay style as
+        // the OCR area picker, just sized down. Marks where the click will
+        // be recorded without replacing the system cursor.
+        let pointPickerSize: CGFloat = 40
+        ScanPreviewPanel.shared.show(rectSize: CGSize(width: pointPickerSize,
+                                                      height: pointPickerSize))
+
+        // Larger reference snapshot (independent of the small visual overlay)
+        // so the action's detail pane has a useful screenshot to display.
+        let captureSession = PickerCaptureSession(
+            size: CGSize(width: 200, height: 200))
+        captureSession.start()
 
         mouseListener.consumesAllClicks = true
         mouseListener.onMouseDown = { [weak self] (point, _) in
@@ -739,7 +997,11 @@ final class ActionDetailBuilder {
             action.point.onNext(point)
             self.mouseListener.stop()
             self.mouseListener.consumesAllClicks = false
-            Self.armPickerVisuals(button: sender, display: display, active: false)
+            Self.armPickerVisuals(button: sender, display: display, active: false, pushCursor: false)
+            if let img = captureSession.stop() {
+                OCRSnapshotStore.shared.save(img, actionId: action.id)
+            }
+            DispatchQueue.main.async { ScanPreviewPanel.shared.hide() }
         }
         mouseListener.start()
     }
@@ -747,15 +1009,23 @@ final class ActionDetailBuilder {
     @objc private func pickWindow(_ sender: NSButton) {
         guard let action = objc_getAssociatedObject(sender, &Self.actionAssocKey) as? AutoAction else { return }
         Self.armPickerVisuals(button: sender, display: nil, active: true)
+
+        let captureSession = PickerCaptureSession(
+            size: CGSize(width: 200, height: 200))
+        captureSession.start()
+
         mouseListener.consumesAllClicks = true
         mouseListener.onMouseDown = { [weak self] (point, _) in
             guard let self = self else { return }
             self.mouseListener.stop()
             self.mouseListener.consumesAllClicks = false
             Self.armPickerVisuals(button: sender, display: nil, active: false)
+            if let img = captureSession.stop() {
+                OCRSnapshotStore.shared.save(img, actionId: action.id)
+            }
             if let frame = WindowFrameUtil.windowFrame(at: point) {
                 let encoded = WindowFrameUtil.encode(frame)
-                action.text.onNext(encoded)
+                action.setEncodedFrame(encoded)
                 AppLogger.shared.log("🪟 윈도우 선택: \(encoded)")
             } else {
                 AppLogger.shared.log("⚠️ 해당 위치에서 윈도우를 찾지 못했습니다")
@@ -766,22 +1036,28 @@ final class ActionDetailBuilder {
 
     /// Toggle the recording-state visuals on a position-pick button + its
     /// optional coordinate display. Active = red bezel + red border on the
-    /// display; inactive = system defaults. Also pushes/pops a custom
-    /// crosshair cursor so the user has clear feedback that the next click
-    /// will be captured.
-    private static func armPickerVisuals(button: NSButton, display: NSTextField?, active: Bool) {
+    /// display; inactive = system defaults. When `pushCursor` is true (the
+    /// default for pickers without their own floating preview), pushes/pops
+    /// a custom crosshair cursor for click feedback. Pickers that show their
+    /// own overlay (`pickPoint`, `pickOCRPoint`, `pickBrowserPosition`)
+    /// pass `pushCursor: false` so the system cursor stays visible and the
+    /// box marks the target location instead.
+    private static func armPickerVisuals(button: NSButton,
+                                         display: NSTextField?,
+                                         active: Bool,
+                                         pushCursor: Bool = true) {
         if active {
             button.bezelColor = .systemRed
             button.contentTintColor = .white
             display?.layer?.borderColor = NSColor.systemRed.cgColor
             display?.layer?.borderWidth = 2
-            pickerCursor.push()
+            if pushCursor { pickerCursor.push() }
         } else {
             button.bezelColor = nil
             button.contentTintColor = nil
             display?.layer?.borderColor = NSColor.separatorColor.cgColor
             display?.layer?.borderWidth = 1
-            NSCursor.pop()
+            if pushCursor { NSCursor.pop() }
         }
     }
 
@@ -821,7 +1097,7 @@ final class ActionDetailBuilder {
 
     @objc private func restoreWindow(_ sender: NSButton) {
         guard let action = objc_getAssociatedObject(sender, &Self.actionAssocKey) as? AutoAction else { return }
-        let s = (try? action.text.value()) ?? ""
+        let s = action.encodedFrame
         guard let frame = WindowFrameUtil.decode(s) else {
             AppLogger.shared.log("⚠️ 저장된 프레임 없음 — 먼저 윈도우를 선택하세요")
             return
@@ -946,12 +1222,12 @@ enum ActionIcons {
         case .key:          names = ["keyboard", "command"]
         case .wait(.click): names = ["hand.tap", "hand.tap.fill", "hourglass"]
         case .wait(.enter): names = ["hourglass.bottomhalf.filled", "hourglass"]
-        case .wait(.code):  names = ["lock.shield", "lock.shield.fill", "key"]
         case .wait(.time):  names = ["clock", "alarm"]
         case .ocr:          names = ["text.viewfinder"]
         case .script:       names = ["curlybraces", "chevron.left.forwardslash.chevron.right"]
         case .setURL:       names = ["globe"]
         case .openChrome:   names = ["plus.rectangle.on.rectangle", "rectangle.on.rectangle"]
+        case .openBrowser:  names = ["safari", "globe", "macwindow"]
         case .windowFrame:  names = ["macwindow", "rectangle"]
         }
         let label = ActionIcons.label(for: type)
@@ -972,12 +1248,12 @@ enum ActionIcons {
         case .key:                  return "⌨︎"
         case .wait(.click):         return "⏳"
         case .wait(.enter):         return "⏎⏳"
-        case .wait(.code):          return "🔐"
         case .wait(.time):          return "⏱"
         case .ocr:                  return "🔍"
         case .script:               return "📝"
         case .setURL:               return "🌐"
         case .openChrome:           return "🆕"
+        case .openBrowser:          return "🌐🪟"
         case .windowFrame:          return "🪟"
         }
     }
@@ -989,12 +1265,12 @@ enum ActionIcons {
         case .key:                  return "키 입력"
         case .wait(.click):         return "클릭 대기"
         case .wait(.enter):         return "엔터 대기"
-        case .wait(.code):          return "인증코드 대기"
         case .wait(.time):          return "시간 대기"
         case .ocr:                  return "OCR 클릭"
         case .script:               return "스크립트 실행"
         case .setURL:               return "URL 설정"
         case .openChrome:           return "새 Chrome 창"
+        case .openBrowser:          return "브라우저"
         case .windowFrame:          return "창 프레임"
         }
     }
@@ -1009,6 +1285,7 @@ private extension AutoAction.ActionType {
         switch self {
         case .setURL(let url):     return url
         case .openChrome(let url): return url
+        case .openBrowser(let url): return url
         default:                   return nil
         }
     }
@@ -1232,6 +1509,143 @@ private final class ScanSizeState: NSObject {
             field.stringValue = "\(snapped)"
         }
         action?.count.onNext(snapped)
+    }
+}
+
+enum BrowserSizeAxis { case width, height }
+
+/// Live screen capture that follows the cursor for the duration of a
+/// position-pick session. Used by non-OCR pickers (`pickPoint`,
+/// `pickBrowserPosition`, `pickWindow`) to record a snapshot of the click
+/// area and persist it via `OCRSnapshotStore` so the action's detail pane
+/// can render a reference thumbnail. Mirrors the cursor-tracking + display-
+/// crossing logic already used by the OCR picker.
+private final class PickerCaptureSession {
+    private let capturer = ScreenCapturer()
+    private let size: CGSize
+    private var globalMonitor: Any?
+    private var localMonitor: Any?
+    private var lastDisplayID: CGDirectDisplayID?
+    private(set) var lastImage: NSImage?
+
+    init(size: CGSize) { self.size = size }
+
+    func start() {
+        let pt = NSEvent.mouseLocation
+        capturer.showsCursor = true
+        capturer.handler = { [weak self] img in
+            if let img = img { self?.lastImage = img }
+        }
+        capturer.start(rect: rect(at: pt))
+        lastDisplayID = displayID(at: pt)
+
+        let updateForMove: () -> Void = { [weak self] in
+            guard let self = self else { return }
+            let pt = NSEvent.mouseLocation
+            let r = self.rect(at: pt)
+            let id = self.displayID(at: pt)
+            if let id = id, id != self.lastDisplayID {
+                self.capturer.stop()
+                // stop() clears the handler, so re-attach.
+                self.capturer.handler = { [weak self] img in
+                    if let img = img { self?.lastImage = img }
+                }
+                self.capturer.showsCursor = true
+                self.capturer.start(rect: r)
+                self.lastDisplayID = id
+            } else {
+                self.capturer.updateCaptureRect(r)
+            }
+        }
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { _ in
+            DispatchQueue.main.async { updateForMove() }
+        }
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { event in
+            updateForMove()
+            return event
+        }
+    }
+
+    @discardableResult
+    func stop() -> NSImage? {
+        capturer.stop()
+        if let m = globalMonitor { NSEvent.removeMonitor(m) }
+        if let m = localMonitor { NSEvent.removeMonitor(m) }
+        globalMonitor = nil
+        localMonitor = nil
+        return lastImage
+    }
+
+    private func rect(at pt: CGPoint) -> CGRect {
+        let hw = size.width / 2
+        let hh = size.height / 2
+        return CGRect(x: pt.x - hw, y: pt.y - hh,
+                      width: size.width, height: size.height)
+    }
+
+    private func displayID(at point: CGPoint) -> CGDirectDisplayID? {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        return NSScreen.screens.first { $0.frame.contains(point) }?
+            .deviceDescription[key] as? CGDirectDisplayID
+    }
+}
+
+/// `target/action` shim for the `.click` 좌/우 segmented control. Translates
+/// the selected segment back into `action.text` via `setClickButton`.
+private final class ClickButtonBridge: NSObject {
+    private weak var action: AutoAction?
+    init(action: AutoAction) { self.action = action }
+
+    @objc func changed(_ sender: NSSegmentedControl) {
+        action?.setClickButton(sender.selectedSegment == 1 ? .right : .left)
+    }
+}
+
+/// Slider/field bridge for one axis of the `.openBrowser` window size.
+/// Keeps the slider and number field in sync, snaps to 50 px, and writes the
+/// new dimension into the action's frame while preserving the other axis,
+/// origin, and URL.
+private final class BrowserSizeState: NSObject {
+    private weak var action: AutoAction?
+    private let axis: BrowserSizeAxis
+    private let slider: NSSlider
+    private let field: NSTextField
+
+    init(action: AutoAction,
+         axis: BrowserSizeAxis,
+         slider: NSSlider,
+         field: NSTextField) {
+        self.action = action
+        self.axis = axis
+        self.slider = slider
+        self.field = field
+    }
+
+    @objc func sliderChanged() {
+        let v = Int(slider.doubleValue)
+        field.stringValue = "\(v)"
+        commit(v)
+    }
+
+    func fieldChanged() {
+        let raw = Int(field.stringValue) ?? 1024
+        let clamped = max(200, min(3000, raw))
+        let snapped = Int(round(Double(clamped) / 50.0)) * 50
+        slider.doubleValue = Double(snapped)
+        if snapped != raw {
+            field.stringValue = "\(snapped)"
+        }
+        commit(snapped)
+    }
+
+    private func commit(_ value: Int) {
+        guard let action = action else { return }
+        var frame = action.browserFrame
+        switch axis {
+        case .width:  frame.size.width = CGFloat(value)
+        case .height: frame.size.height = CGFloat(value)
+        }
+        action.setBrowserFrame(frame)
     }
 }
 

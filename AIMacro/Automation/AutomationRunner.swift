@@ -30,7 +30,7 @@ final class AutomationRunner {
     /// Last error message, set when an action fails. UI uses this for a status banner.
     let lastError = BehaviorSubject<String?>(value: nil)
 
-    /// Flag used to break out of in-action wait loops (.wait(.enter), .wait(.code)).
+    /// Flag used to break out of in-action wait loops (.wait(.enter)).
     /// Settable externally via `signalWaitDone()` so the view controller can flip it
     /// from its keyboard subscription on the Enter key.
     private var waitDone = false
@@ -57,8 +57,8 @@ final class AutomationRunner {
     /// Run the full action list sequentially. Per-action errors are surfaced via
     /// `lastError` but don't abort the sequence — matches the previous behaviour.
     func run(_ actions: [AutoAction]) async throws {
-        // Broadcast first so any listener (SocketService, KeyUtil cache, etc.)
-        // can wipe stale per-run state before the first action fires.
+        // Broadcast first so any listener (KeyUtil cache, etc.) can wipe stale
+        // per-run state before the first action fires.
         NotificationCenter.default.post(name: .actionSequenceWillStart, object: self)
 
         keyboardListener.stop()
@@ -104,6 +104,7 @@ final class AutomationRunner {
         case .script(let code):        try await runScript(action, code: code)
         case .setURL(let url):         setChromeURL(effectiveURL(action, default: url))
         case .openChrome(let url):     openNewChromeWindow(effectiveURL(action, default: url))
+        case .openBrowser(let url):    try await runOpenBrowser(action, default: url)
         case .windowFrame:             try await runWindowFrame(action)
         }
     }
@@ -113,8 +114,12 @@ final class AutomationRunner {
     private func runClick(_ action: AutoAction) async throws {
         let count = try! action.count.value()
         let point = try! action.point.value()
+        let button = action.clickButton
         for i in 0 ..< count {
-            await click(at: point)
+            switch button {
+            case .left:  await click(at: point)
+            case .right: await rightClick(at: point)
+            }
             if i < count - 1 {
                 try await Task.sleep(for: .milliseconds(100))
             }
@@ -148,7 +153,6 @@ final class AutomationRunner {
         switch type {
         case .click: try await waitForMouseClick()
         case .enter: try await waitForEnterKey()
-        case .code:  try await waitForVerificationCode()
         case .time:  try await waitUntilTime(try! action.text.value())
         }
     }
@@ -173,33 +177,6 @@ final class AutomationRunner {
         waitDone = false
         while !waitDone {
             try await Task.sleep(for: .milliseconds(10))
-        }
-        waitDone = false
-    }
-
-    private func waitForVerificationCode() async throws {
-        waitDone = false
-
-        let codeDisposable = SocketService.shared.receivedCode
-            .subscribe(onNext: { [weak self] code in
-                guard !code.isEmpty && self?.waitDone == false else { return }
-                SocketService.shared.receivedCode.onNext("")
-                AppLogger.shared.log("🔐 인증번호 자동 입력: \(code)")
-                Task {
-                    setPasteboard(code)
-                    try? await Task.sleep(for: .milliseconds(10))
-                    // selectAllKey()    // clear any stale digits in the field
-                    // try? await Task.sleep(for: .milliseconds(20))
-                    pasteKey()
-                    self?.waitDone = true
-                }
-            })
-        // Dispose even on cancellation, otherwise a second run leaves the
-        // previous subscriber alive and the next code gets pasted twice.
-        defer { codeDisposable.dispose() }
-
-        while !waitDone {
-            try await Task.sleep(for: .milliseconds(100))
         }
         waitDone = false
     }
@@ -350,6 +327,32 @@ final class AutomationRunner {
     private func effectiveURL(_ action: AutoAction, default fallback: String) -> String {
         let v = (try? action.text.value()) ?? ""
         return v.isEmpty ? fallback : v
+    }
+
+    private func runOpenBrowser(_ action: AutoAction, default fallbackURL: String) async throws {
+        let raw = (try? action.text.value()) ?? ""
+        let parsed = OpenBrowserPayload.parse(raw)
+        let url = parsed.url.isEmpty ? fallbackURL : parsed.url
+        guard !url.isEmpty else {
+            AppLogger.shared.log("⚠️ 브라우저 열기 — URL 없음")
+            return
+        }
+
+        DispatchQueue.main.async { openInDefaultBrowser(url) }
+        AppLogger.shared.log("🌐 브라우저 열기: \(url)")
+
+        // Wait for the browser window to come up before applying the frame.
+        // 600ms covers most cold-launches; warm cases finish well within.
+        guard !parsed.frame.isEmpty,
+              let frame = WindowFrameUtil.decode(parsed.frame) else { return }
+        try await Task.sleep(for: .milliseconds(600))
+        DispatchQueue.main.async {
+            if WindowFrameUtil.applyToFrontmostWindow(frame) {
+                AppLogger.shared.log("🪟 브라우저 창 프레임 적용: \(parsed.frame)")
+            } else {
+                AppLogger.shared.log("⚠️ 브라우저 창 프레임 적용 실패")
+            }
+        }
     }
 
     private func runWindowFrame(_ action: AutoAction) async throws {

@@ -120,10 +120,58 @@ class ViewController: NSViewController {
                 c.isActive = false
             }
         }
-        scroll.widthAnchor.constraint(equalToConstant: 280).isActive = true
+        scroll.widthAnchor.constraint(equalToConstant: 196).isActive = true
+
+        // "+ 동작 추가" button at the top of the sidebar — pops the action-type
+        // menu and appends to the current scenario. We unhook the scroll
+        // view's existing top constraint and re-anchor it just below the
+        // button so the storyboard's top-of-table position becomes the
+        // top-of-button position.
+        let addButton = NSButton(title: "＋ 동작 추가",
+                                 target: self,
+                                 action: #selector(showAppendActionMenu(_:)))
+        addButton.bezelStyle = .roundRect
+        addButton.controlSize = .regular
+        addButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(addButton)
+
+        // Capture the scroll view's existing top constraint to the parent so we
+        // can transfer it to the button.
+        var scrollTopConstraint: NSLayoutConstraint?
+        for c in view.constraints {
+            if (c.firstItem as? NSView) === scroll && c.firstAttribute == .top {
+                scrollTopConstraint = c
+                break
+            }
+            if (c.secondItem as? NSView) === scroll && c.secondAttribute == .top {
+                scrollTopConstraint = c
+                break
+            }
+        }
+        scrollTopConstraint?.isActive = false
+
+        let buttonTop: NSLayoutConstraint
+        if let old = scrollTopConstraint, let anchorView = (old.firstItem as? NSView) === scroll
+            ? (old.secondItem as? NSView) : (old.firstItem as? NSView) {
+            // Re-pin the button to whatever the scroll's top was anchored to,
+            // preserving the storyboard's offset.
+            let storyboardOffset = (old.firstItem as? NSView) === scroll ? old.constant : -old.constant
+            buttonTop = addButton.topAnchor.constraint(equalTo: anchorView.bottomAnchor,
+                                                      constant: storyboardOffset)
+        } else {
+            buttonTop = addButton.topAnchor.constraint(equalTo: view.topAnchor, constant: 8)
+        }
+
+        NSLayoutConstraint.activate([
+            buttonTop,
+            addButton.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
+            addButton.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
+            addButton.heightAnchor.constraint(equalToConstant: 24),
+            scroll.topAnchor.constraint(equalTo: addButton.bottomAnchor, constant: 4),
+        ])
 
         // The detail container fills the rest of the row to the right of the
-        // table, vertically aligned with it.
+        // table, vertically aligned with the button + table together.
         detailContainer = NSView()
         detailContainer.translatesAutoresizingMaskIntoConstraints = false
         detailContainer.wantsLayer = true
@@ -132,7 +180,7 @@ class ViewController: NSViewController {
         NSLayoutConstraint.activate([
             detailContainer.leadingAnchor.constraint(equalTo: scroll.trailingAnchor),
             detailContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            detailContainer.topAnchor.constraint(equalTo: scroll.topAnchor),
+            detailContainer.topAnchor.constraint(equalTo: addButton.topAnchor),
             detailContainer.bottomAnchor.constraint(equalTo: scroll.bottomAnchor),
         ])
 
@@ -305,7 +353,6 @@ class ViewController: NSViewController {
             } else {
                 self.startButton.title = "Start"
                 self.startButton.bezelColor = .green
-                SocketService.shared.receivedCode.onNext("")
                 self.task?.cancel()
                 self.task = nil
                 self.timer?.cancel()
@@ -668,12 +715,16 @@ class ViewController: NSViewController {
             ("⌨︎  키 입력", .key),
             ("⏳  클릭대기", .wait(type: .click)),
             ("⏎⏳  엔터대기", .wait(type: .enter)),
-            ("🔐  인증코드", .wait(type: .code)),
             ("⏱  시간대기", .wait(type: .time)),
             ("🔍  OCR", .ocr),
             ("📝  스크립트", .script(code: "")),
-            ("🌐  URL", .setURL(url: "")),
-            ("🆕  새창", .openChrome(url: "")),
+            // Hidden from the picker until needed again — `.setURL` /
+            // `.openChrome` are Chrome-specific and superseded by `.openBrowser`.
+            // Runtime / detail UI / persistence for these types stays intact
+            // so old scenarios still load and run.
+            // ("🌐  URL", .setURL(url: "")),
+            // ("🆕  새창", .openChrome(url: "")),
+            ("🌐🪟  브라우저", .openBrowser(url: "")),
             ("🪟  창프레임", .windowFrame),
         ]
         for (label, type) in types {
@@ -711,7 +762,44 @@ class ViewController: NSViewController {
         } else {
             insertIndex = max(0, min(clicked + spec.offset, scenario.actions.count))
         }
-        let newAction = makeDefaultAction(type: spec.type, group: scenario.name)
+        appendOrInsertAction(of: spec.type, at: insertIndex, in: scenario)
+    }
+
+    /// Pop the action-type menu directly under the "+ 동작 추가" button.
+    /// Routes all picks through `appendActionFromMenu` so the new row always
+    /// lands at the end of the current scenario, regardless of whatever the
+    /// table view's last `clickedRow` happened to be.
+    @objc private func showAppendActionMenu(_ sender: NSButton) {
+        let menu = makeAppendActionTypeMenu()
+        menu.popUp(positioning: nil,
+                   at: NSPoint(x: 0, y: sender.bounds.height + 2),
+                   in: sender)
+    }
+
+    private func makeAppendActionTypeMenu() -> NSMenu {
+        let m = makeActionTypeMenu(insertOffset: 0)
+        for item in m.items {
+            item.action = #selector(appendActionFromMenu(_:))
+            item.target = self
+        }
+        return m
+    }
+
+    @objc private func appendActionFromMenu(_ sender: NSMenuItem) {
+        guard let spec = sender.representedObject as? ActionInsertSpec else { return }
+        let store = ScenarioStore.shared
+        guard store.scenarios.indices.contains(currentScenarioIndex) else { return }
+        let scenario = store.scenarios[currentScenarioIndex]
+        appendOrInsertAction(of: spec.type,
+                             at: scenario.actions.count,
+                             in: scenario)
+    }
+
+    private func appendOrInsertAction(of type: AutoAction.ActionType,
+                                      at insertIndex: Int,
+                                      in scenario: Scenario) {
+        let store = ScenarioStore.shared
+        let newAction = makeDefaultAction(type: type, group: scenario.name)
         // Persist defaults before loadCurrentScenario triggers a.restore()
         // — otherwise stale rows under the same id would overwrite them.
         newAction.save()
@@ -759,13 +847,13 @@ class ViewController: NSViewController {
             switch wt {
             case .click: name = "클릭대기"
             case .enter: name = "엔터대기"
-            case .code:  name = "인증코드"
             case .time:  name = "시간대기"; text = "09:00:00"
             }
         case .ocr:                    name = "OCR"; delay = 0.5; count = 200
         case .script:                 name = "스크립트"
         case .setURL:                 name = "URL설정"
         case .openChrome:             name = "새창"
+        case .openBrowser:            name = "브라우저"; delay = 0.3
         case .windowFrame:            name = "창프레임"
         }
         return AutoAction(type: type, group: group, name: "New " + name,
@@ -880,8 +968,6 @@ class ViewController: NSViewController {
             "scenarioIndex": currentScenarioIndex,
             "preferences": [
                 "maxRandomDelay": Preferences.maxRandomDelay,
-                "serverURL": SocketService.shared.serverURL,
-                "userName": SocketService.shared.userName,
             ],
             "actions": actionsDict,
         ]
@@ -938,8 +1024,6 @@ class ViewController: NSViewController {
 
         if let prefs = json["preferences"] as? [String: Any] {
             if let v = prefs["maxRandomDelay"] as? Double { Preferences.maxRandomDelay = v }
-            if let v = prefs["serverURL"] as? String { SocketService.shared.serverURL = v }
-            if let v = prefs["userName"] as? String { SocketService.shared.userName = v }
         }
 
         if let actionsDict = json["actions"] as? [String: Any] {

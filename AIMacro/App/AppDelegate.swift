@@ -26,7 +26,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         requestAppleEventsPermission()
         wirePreferencesMenu()
         setupGlobalObservers()
-        SocketService.shared.connect()
         setupStatusItem()
         attachWindowDelegate()
     }
@@ -137,27 +136,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestAccessibilityPermission() {
+        // Passing true to kAXTrustedCheckOptionPrompt makes macOS show its own
+        // system dialog when permission is missing — that's the only prompt we
+        // want, so don't stack an extra NSAlert on top.
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
-        if !AXIsProcessTrustedWithOptions(options) {
-            showPermissionAlert(
-                title: "손쉬운 사용 권한 필요",
-                message: "마우스/키보드 제어를 위해 손쉬운 사용 권한이 필요합니다.\n시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용에서 허용 후 앱을 재시작해주세요.",
-                settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-            )
-        }
+        _ = AXIsProcessTrustedWithOptions(options)
     }
 
     private func requestScreenCapturePermission() {
         // CGPreflightScreenCaptureAccess() returns the cached TCC state without
         // prompting; CGRequestScreenCaptureAccess() adds the app to the system
-        // settings list and shows the prompt the first time it's called.
+        // settings list and shows the system prompt the first time it's called.
         if !CGPreflightScreenCaptureAccess() {
             CGRequestScreenCaptureAccess()
-            showPermissionAlert(
-                title: "화면 기록 권한 필요",
-                message: "OCR 기능을 위해 화면 기록 권한이 필요합니다.\n시스템 설정 > 개인정보 보호 및 보안 > 화면 기록에서 허용 후 앱을 재시작해주세요.",
-                settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-            )
         }
     }
 
@@ -165,18 +156,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Trigger Apple Events permission for Chrome automation (setChromeURL)
         let script = NSAppleScript(source: "tell application \"System Events\" to return name of processes")
         script?.compileAndReturnError(nil)
-    }
-
-    private func showPermissionAlert(title: String, message: String, settingsURL: String) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "시스템 설정 열기")
-        alert.addButton(withTitle: "닫기")
-        if alert.runModal() == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(URL(string: settingsURL)!)
-        }
     }
     
     func applicationWillTerminate(_ aNotification: Notification) {

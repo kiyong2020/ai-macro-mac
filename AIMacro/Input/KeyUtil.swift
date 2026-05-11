@@ -33,6 +33,19 @@ func click(at point: CGPoint) async {
     mouseUp?.post(tap: .cghidEventTap)
 }
 
+func rightClick(at point: CGPoint) async {
+    await simulateMouseMove(to: point)
+    let source = CGEventSource(stateID: .hidSystemState)
+    let mouseDown = CGEvent(mouseEventSource: source, mouseType: .rightMouseDown, mouseCursorPosition: point, mouseButton: .right)
+    let mouseUp   = CGEvent(mouseEventSource: source, mouseType: .rightMouseUp,   mouseCursorPosition: point, mouseButton: .right)
+    mouseDown?.setIntegerValueField(.mouseEventClickState, value: 1)
+    mouseUp?.setIntegerValueField(.mouseEventClickState, value: 1)
+    mouseDown?.post(tap: .cghidEventTap)
+    let holdMs = 12 + Int(pow(Double.random(in: 0...1), 2.0) * 33)
+    try? await Task.sleep(for: .milliseconds(holdMs))
+    mouseUp?.post(tap: .cghidEventTap)
+}
+
 /// Last simulated cursor position in Quartz coords. Tracked across calls so each move
 /// continues smoothly from where the previous one ended (instead of jumping based on
 /// the system cursor position, which may have been changed by the user or other code).

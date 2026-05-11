@@ -5,7 +5,6 @@ target 'AIMacro' do
 
   pod 'RxSwift', '6.2.0'
   pod 'RxCocoa', '6.2.0'
-  pod 'Socket.IO-Client-Swift', '~> 16.1.0'
   # Type-safe Swift wrapper around SQLite. Used by ActionStore for per-action
   # state (replaces UserDefaults for AutoAction.save/restore).
   pod 'SQLite.swift', '~> 0.15'

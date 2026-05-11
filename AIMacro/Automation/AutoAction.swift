@@ -11,7 +11,6 @@ class AutoAction {
     enum WaitType {
         case click
         case enter
-        case code
         case time
     }
     
@@ -31,6 +30,10 @@ class AutoAction {
         case script(code: String)  /// script
         case setURL(url: String) /// chrome 브라우저의 url 설정
         case openChrome(url: String) /// 새 chrome 창을 열고 url 로드
+        /// 디폴트 브라우저로 url 을 열고, 저장된 프레임이 있으면 frontmost 창에
+        /// 그대로 적용. action.text 는 "<url>|<frame>" 파이프 구분 포맷
+        /// (`OpenBrowserPayload`).
+        case openBrowser(url: String)
         case windowFrame /// 활성 윈도우 프레임을 저장된 사각형으로 맞춤
     }
 
@@ -203,6 +206,7 @@ extension AutoAction {
         case .script(let code):       return ["kind": "script", "code": code]
         case .setURL(let url):        return ["kind": "setURL", "url": url]
         case .openChrome(let url):    return ["kind": "openChrome", "url": url]
+        case .openBrowser(let url):   return ["kind": "openBrowser", "url": url]
         case .windowFrame:            return ["kind": "windowFrame"]
         }
     }
@@ -221,6 +225,7 @@ extension AutoAction {
         case "script":      return .script(code: dict["code"] as? String ?? "")
         case "setURL":      return .setURL(url: dict["url"] as? String ?? "")
         case "openChrome":  return .openChrome(url: dict["url"] as? String ?? "")
+        case "openBrowser": return .openBrowser(url: dict["url"] as? String ?? "")
         case "windowFrame": return .windowFrame
         default:            return nil
         }
@@ -230,7 +235,6 @@ extension AutoAction {
         switch wt {
         case .click: return "click"
         case .enter: return "enter"
-        case .code:  return "code"
         case .time:  return "time"
         }
     }
@@ -239,9 +243,92 @@ extension AutoAction {
         switch s {
         case "click": return .click
         case "enter": return .enter
-        case "code":  return .code
         case "time":  return .time
+        // Legacy "code" payloads (verification-code wait, removed with the
+        // socket service) decode to nil so fromFullJSON drops them via the
+        // caller's compactMap.
         default:      return nil
         }
+    }
+}
+
+// MARK: - .openBrowser payload
+
+/// Pipe-delimited "<url>|<frame>" packed into a single `action.text`. The
+/// frame half uses the same string format as `.windowFrame` actions
+/// (`WindowFrameUtil.encode`). Either half may be empty.
+enum OpenBrowserPayload {
+    static func parse(_ s: String) -> (url: String, frame: String) {
+        if let pipe = s.firstIndex(of: "|") {
+            return (String(s[..<pipe]), String(s[s.index(after: pipe)...]))
+        }
+        return (s, "")
+    }
+
+    static func encode(url: String, frame: String) -> String {
+        return frame.isEmpty ? url : "\(url)|\(frame)"
+    }
+}
+
+// MARK: - Frame slot accessor (.windowFrame + .openBrowser)
+
+/// Lets the window-frame picker UI (`makeWindowFrameRow`, `pickWindow`,
+/// `restoreWindow`) read/write the frame for both `.windowFrame` (frame is
+/// the entire `text`) and `.openBrowser` (frame is the second pipe-half).
+extension AutoAction {
+    /// Encoded frame string ("x,y,w,h" via `WindowFrameUtil.encode`), or
+    /// empty when no frame has been set.
+    var encodedFrame: String {
+        let raw = (try? text.value()) ?? ""
+        switch type {
+        case .openBrowser: return OpenBrowserPayload.parse(raw).frame
+        default:           return raw
+        }
+    }
+
+    func setEncodedFrame(_ encoded: String) {
+        switch type {
+        case .openBrowser:
+            let cur = OpenBrowserPayload.parse((try? text.value()) ?? "")
+            text.onNext(OpenBrowserPayload.encode(url: cur.url, frame: encoded))
+        default:
+            text.onNext(encoded)
+        }
+    }
+
+    /// Decoded frame for `.openBrowser` (`.zero` if unset). Only meaningful
+    /// for that action type.
+    var browserFrame: CGRect {
+        WindowFrameUtil.decode(encodedFrame) ?? .zero
+    }
+
+    func setBrowserFrame(_ frame: CGRect) {
+        setEncodedFrame(WindowFrameUtil.encode(frame))
+    }
+}
+
+// MARK: - .click button (left/right)
+
+/// Mouse button selection for `.click` actions, stored in `action.text`
+/// ("right" → right click; anything else, including legacy empty values, →
+/// left click).
+enum ClickButton: String {
+    case left
+    case right
+
+    static func parse(_ raw: String) -> ClickButton {
+        return ClickButton(rawValue: raw.lowercased()) ?? .left
+    }
+}
+
+extension AutoAction {
+    /// Mouse button for `.click` actions. Defaults to `.left` for legacy
+    /// rows where `text` is empty.
+    var clickButton: ClickButton {
+        ClickButton.parse((try? text.value()) ?? "")
+    }
+
+    func setClickButton(_ button: ClickButton) {
+        text.onNext(button.rawValue)
     }
 }

@@ -69,6 +69,36 @@ func openNewChromeWindow(_ url: String) {
     try? task.run()
 }
 
+/// Open `url` in whichever browser the user has set as the system default.
+/// Behaviour mirrors clicking a hyperlink: the browser is launched if it's
+/// not running, an existing window receives a new tab otherwise.
+///
+/// Auto-prepends `https://` when the input has no scheme — `URL(string:)`
+/// accepts schemeless strings as relative URLs, which then resolve to nothing
+/// and surface as "해당 응용 프로그램을 열 수 없습니다 -50" via Finder.
+func openInDefaultBrowser(_ url: String) {
+    let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        AppLogger.shared.log("⚠️ URL 이 비어있습니다")
+        return
+    }
+
+    let normalized: String
+    if trimmed.range(of: "^[a-zA-Z][a-zA-Z0-9+.\\-]*://", options: .regularExpression) != nil {
+        normalized = trimmed
+    } else {
+        normalized = "https://" + trimmed
+    }
+
+    guard let parsed = URL(string: normalized),
+          let scheme = parsed.scheme?.lowercased(),
+          scheme == "http" || scheme == "https" else {
+        AppLogger.shared.log("⚠️ 잘못된 URL: \(url)")
+        return
+    }
+    NSWorkspace.shared.open(parsed)
+}
+
 func runJavaScriptInChromeBase64(_ jsCode: String) {
     // Base64 인코딩
     let base64 = Data(jsCode.utf8).base64EncodedString()

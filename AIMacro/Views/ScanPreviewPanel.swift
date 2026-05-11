@@ -8,9 +8,11 @@ class ScanPreviewPanel: NSPanel {
     private let previewView = ScanPreviewView()
     private var moveMonitor: Any?
     private var localMoveMonitor: Any?
-    /// Side length (logical points) of the highlighted capture square.
-    /// Defaults to `Constants.ocrCaptureSize` but can be overridden per-show.
-    private var size: CGFloat = Constants.ocrCaptureSize
+    /// Logical-point size of the highlighted area. Square for the OCR scan
+    /// preview (default = `Constants.ocrCaptureSize`), arbitrary W×H for the
+    /// `.openBrowser` window-position picker.
+    private var size: CGSize = CGSize(width: Constants.ocrCaptureSize,
+                                      height: Constants.ocrCaptureSize)
 
     private init() {
         super.init(contentRect: .zero,
@@ -27,8 +29,16 @@ class ScanPreviewPanel: NSPanel {
         contentView = previewView
     }
 
+    /// Square preview convenience — used by the OCR position picker.
     func show(size: CGFloat = Constants.ocrCaptureSize) {
-        self.size = max(20, size)
+        show(rectSize: CGSize(width: size, height: size))
+    }
+
+    /// Rectangular preview — used by the `.openBrowser` position picker so the
+    /// floating overlay matches the user-entered window size.
+    func show(rectSize: CGSize) {
+        self.size = CGSize(width: max(20, rectSize.width),
+                           height: max(20, rectSize.height))
         orderFrontRegardless()
         updatePosition(NSEvent.mouseLocation)
 
@@ -52,10 +62,11 @@ class ScanPreviewPanel: NSPanel {
     }
 
     private func updatePosition(_ nsPoint: CGPoint) {
-        let half = size / 2
-        // Center the window on the cursor in NSScreen coords (Y-up)
-        let frame = CGRect(x: nsPoint.x - half, y: nsPoint.y - half,
-                           width: size, height: size)
+        let halfW = size.width / 2
+        let halfH = size.height / 2
+        // Center the panel on the cursor in NSScreen coords (Y-up).
+        let frame = CGRect(x: nsPoint.x - halfW, y: nsPoint.y - halfH,
+                           width: size.width, height: size.height)
         setFrame(frame, display: true)
         previewView.needsDisplay = true
     }
@@ -71,37 +82,10 @@ private class ScanPreviewView: NSView {
         ctx.setFillColor(NSColor(white: 1, alpha: 0.08).cgColor)
         ctx.fill([bounds])
 
-        // Yellow border — marks the exact OCR scan boundary
+        // Yellow border — marks the exact OCR scan boundary. Center marker
+        // removed because it overlaps the system mouse cursor anyway.
         ctx.setStrokeColor(NSColor.systemYellow.cgColor)
         ctx.setLineWidth(3)
         ctx.stroke(bounds.insetBy(dx: 1.5, dy: 1.5))
-
-        // Crosshair at center (cursor is always centered inside this window)
-        let cx = bounds.midX, cy = bounds.midY
-        let len: CGFloat = 12
-        ctx.setStrokeColor(NSColor.systemRed.cgColor)
-        ctx.setLineWidth(1.5)
-        ctx.move(to: CGPoint(x: cx - len, y: cy)); ctx.addLine(to: CGPoint(x: cx + len, y: cy))
-        ctx.move(to: CGPoint(x: cx, y: cy - len)); ctx.addLine(to: CGPoint(x: cx, y: cy + len))
-        ctx.strokePath()
-        ctx.setLineWidth(1)
-        ctx.strokeEllipse(in: CGRect(x: cx - 8, y: cy - 8, width: 16, height: 16))
-
-        // Label at top of the box
-        let label = "클릭하여 저장"
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 9, weight: .semibold),
-            .foregroundColor: NSColor.white,
-        ]
-        let str = NSAttributedString(string: label, attributes: attrs)
-        let strSize = str.size()
-        let padding: CGFloat = 6
-        let bgRect = CGRect(x: bounds.midX - strSize.width / 2 - padding,
-                            y: bounds.maxY - strSize.height - padding * 2,
-                            width: strSize.width + padding * 2,
-                            height: strSize.height + padding)
-        ctx.setFillColor(NSColor(white: 0, alpha: 0.65).cgColor)
-        ctx.fill([bgRect])
-        str.draw(at: CGPoint(x: bgRect.origin.x + padding, y: bgRect.origin.y + padding / 2))
     }
 }

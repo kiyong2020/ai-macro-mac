@@ -838,11 +838,11 @@
                             <constraint firstItem="Mnr-1r-EvB" firstAttribute="leading" secondItem="m2S-Jp-Qdl" secondAttribute="leading" id="LxH-iL-PhT"/>
                             <constraint firstItem="sbf-V8-9Jl" firstAttribute="leading" secondItem="m2S-Jp-Qdl" secondAttribute="leading" id="Owr-2F-2bU"/>
                             <constraint firstAttribute="bottom" secondItem="Mnr-1r-EvB" secondAttribute="bottom" id="eLs-Gr-xgl"/>
-                            <constraint firstItem="mwQ-8s-SEO" firstAttribute="top" secondItem="m2S-Jp-Qdl" secondAttribute="top" constant="38" id="fnV-3r-Qdk"/>
+                            <constraint firstItem="mwQ-8s-SEO" firstAttribute="top" secondItem="m2S-Jp-Qdl" secondAttribute="top" constant="43" id="fnV-3r-Qdk"/>
                             <constraint firstItem="HB8-T6-FoI" firstAttribute="baseline" secondItem="mwQ-8s-SEO" secondAttribute="baseline" id="m7X-UB-YDQ"/>
                             <constraint firstAttribute="trailing" secondItem="Mnr-1r-EvB" secondAttribute="trailing" id="os3-sw-81N"/>
                             <constraint firstItem="WCt-oY-w51" firstAttribute="top" secondItem="m2S-Jp-Qdl" secondAttribute="top" constant="10" id="soL-lM-gRJ"/>
-                            <constraint firstItem="sbf-V8-9Jl" firstAttribute="top" secondItem="mwQ-8s-SEO" secondAttribute="bottom" constant="8" id="zA6-MR-yHp"/>
+                            <constraint firstItem="sbf-V8-9Jl" firstAttribute="top" secondItem="mwQ-8s-SEO" secondAttribute="bottom" constant="13" id="zA6-MR-yHp"/>
                         </constraints>
                     </view>
                     <connections>
