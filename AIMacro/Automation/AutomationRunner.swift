@@ -35,6 +35,20 @@ final class AutomationRunner {
     /// from its keyboard subscription on the Enter key.
     private var waitDone = false
 
+    /// Populated when a `.nextScenario` action runs. The run loop checks
+    /// it after each action and breaks early; the view controller reads
+    /// this property when `run(_:)` returns to decide which scenario to
+    /// move to.
+    ///
+    /// - `.next`           — jump to the next scenario in the list
+    /// - `.specific(id:)`  — jump to the scenario with the given UUID
+    private(set) var nextScenarioRequest: NextScenarioRequest?
+
+    enum NextScenarioRequest {
+        case next
+        case specific(id: String)
+    }
+
     init(mouseListener: MouseListener, keyboardListener: GlobalKeyListener) {
         self.mouseListener = mouseListener
         self.keyboardListener = keyboardListener
@@ -70,6 +84,7 @@ final class AutomationRunner {
         keyboardListener.stop()
         totalCount.onNext(actions.count)
         lastError.onNext(nil)
+        nextScenarioRequest = nil
         try await Task.sleep(for: .milliseconds(100))
 
         for (i, action) in actions.enumerated() {
@@ -82,6 +97,9 @@ final class AutomationRunner {
                 AppLogger.shared.log("⚠️ \(msg)")
                 lastError.onNext(msg)
             }
+            // Short-circuit: a `.nextScenario` action just ran and asked the
+            // view controller to move on. Don't execute remaining actions.
+            if nextScenarioRequest != nil { break }
         }
 
         currentIndex.onNext(nil)
@@ -113,6 +131,7 @@ final class AutomationRunner {
         case .openBrowser(let url):    try await runOpenBrowser(action, default: url)
         case .drag:                    try await runDrag(action)
         case .windowFrame:             try await runWindowFrame(action)
+        case .nextScenario:            runNextScenario(action)
         }
     }
 
@@ -130,6 +149,22 @@ final class AutomationRunner {
             if i < count - 1 {
                 try await Task.sleep(for: .milliseconds(100))
             }
+        }
+    }
+
+    /// Populates `nextScenarioRequest` so the run loop short-circuits and
+    /// the view controller routes the run to the right scenario. The
+    /// target is encoded in `action.text` — empty for "next in list",
+    /// or a scenario UUID for a specific jump.
+    private func runNextScenario(_ action: AutoAction) {
+        let raw = ((try? action.text.value()) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.isEmpty {
+            nextScenarioRequest = .next
+            AppLogger.shared.log("➡️ 다음 플로우로 이동 요청 (목록 순서)")
+        } else {
+            nextScenarioRequest = .specific(id: raw)
+            AppLogger.shared.log("➡️ 플로우 전환 요청: \(raw)")
         }
     }
 

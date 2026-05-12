@@ -38,6 +38,9 @@ class AutoAction {
         /// ("x1,y1;x2,y2;...") 을 차례로 부드럽게 이동 → 마지막 점에서 up.
         case drag
         case windowFrame /// 활성 윈도우 프레임을 저장된 사각형으로 맞춤
+        /// 현재 플로우를 끝내고 플로우 목록의 다음 플로우를 새로 시작.
+        /// 마지막 플로우에서는 그냥 종료.
+        case nextScenario
     }
 
     var disposeBag: DisposeBag = .init()
@@ -212,6 +215,7 @@ extension AutoAction {
         case .openBrowser(let url):   return ["kind": "openBrowser", "url": url]
         case .drag:                   return ["kind": "drag"]
         case .windowFrame:            return ["kind": "windowFrame"]
+        case .nextScenario:           return ["kind": "nextScenario"]
         }
     }
 
@@ -230,8 +234,9 @@ extension AutoAction {
         case "setURL":      return .setURL(url: dict["url"] as? String ?? "")
         case "openChrome":  return .openChrome(url: dict["url"] as? String ?? "")
         case "openBrowser": return .openBrowser(url: dict["url"] as? String ?? "")
-        case "drag":        return .drag
-        case "windowFrame": return .windowFrame
+        case "drag":         return .drag
+        case "windowFrame":  return .windowFrame
+        case "nextScenario": return .nextScenario
         default:            return nil
         }
     }

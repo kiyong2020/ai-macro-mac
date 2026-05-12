@@ -141,7 +141,7 @@ class ViewController: NSViewController {
                                  action: #selector(showAppendActionMenu(_:)))
         addButton.bezelStyle = .roundRect
         addButton.controlSize = .regular
-        addButton.toolTip = L("Append new action to current scenario")
+        addButton.toolTip = L("Append new action to current flow")
         addButton.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(addButton)
 
@@ -589,7 +589,7 @@ class ViewController: NSViewController {
         // settings button on the right is the storyboard's existing 설정
         // button, already wired to `onSettings:`.
         let addBtn = smallButton("＋", #selector(onAddScenario))
-        addBtn.toolTip = L("Duplicate current scenario")
+        addBtn.toolTip = L("Duplicate current flow")
 
         scenarioPopup = NSPopUpButton(frame: .zero, pullsDown: false)
         scenarioPopup.target = self
@@ -597,7 +597,7 @@ class ViewController: NSViewController {
         scenarioPopup.translatesAutoresizingMaskIntoConstraints = false
 
         scenarioEditButton = smallButton("편집", #selector(showScenarioEditPopover))
-        scenarioEditButton.toolTip = L("Rename / delete scenario")
+        scenarioEditButton.toolTip = L("Rename / delete flow")
 
         let stack = NSStackView(views: [addBtn, scenarioPopup, scenarioEditButton])
         stack.orientation = .horizontal
@@ -698,16 +698,16 @@ class ViewController: NSViewController {
 
     @objc private func onAddScenario() {
         let store = ScenarioStore.shared
-        guard store.scenarios.indices.contains(currentScenarioIndex) else { return }
-        let baseName = store.scenarios[currentScenarioIndex].name
-        let newName = "\(baseName) 복사본"
-        if store.duplicate(at: currentScenarioIndex, newName: newName) != nil {
-            currentScenarioIndex = store.scenarios.count - 1
-            persistCurrentScenarioSelection()
-            refreshScenarioPopup()
-            loadCurrentScenario()
-            AppLogger.shared.log("➕ 시나리오 추가: \(newName)")
-        }
+        let baseName = store.scenarios.indices.contains(currentScenarioIndex)
+            ? store.scenarios[currentScenarioIndex].name
+            : "Flow"
+        let newName = "New \(baseName)"
+        store.add(Scenario(name: newName, actions: []))
+        currentScenarioIndex = store.scenarios.count - 1
+        persistCurrentScenarioSelection()
+        refreshScenarioPopup()
+        loadCurrentScenario()
+        AppLogger.shared.log("➕ 플로우 추가: \(newName)")
     }
 
     /// Modal dialog with a name text field and three buttons: 확인 / 취소 /
@@ -719,8 +719,8 @@ class ViewController: NSViewController {
         let current = store.scenarios[currentScenarioIndex]
 
         let alert = NSAlert()
-        alert.messageText = "시나리오 편집"
-        alert.informativeText = "이름을 변경하거나 시나리오를 삭제할 수 있습니다."
+        alert.messageText = "플로우 편집"
+        alert.informativeText = "이름을 변경하거나 플로우를 삭제할 수 있습니다."
 
         let input = NSTextField(string: current.name)
         input.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
@@ -816,6 +816,7 @@ class ViewController: NSViewController {
             // ("🆕  새창", .openChrome(url: "")),
             (L("🌐🪟  Browser"), .openBrowser(url: "")),
             (L("🪟  Window Frame"), .windowFrame),
+            (L("➡️  Next Flow"), .nextScenario),
         ]
         for (label, type) in types {
             let item = NSMenuItem(title: label,
@@ -946,6 +947,7 @@ class ViewController: NSViewController {
         case .openChrome:             name = "새창"
         case .openBrowser:            name = "브라우저"; delay = 0.3
         case .windowFrame:            name = "창프레임"
+        case .nextScenario:           name = "다음 플로우"
         }
         return AutoAction(type: type, group: group, name: "New " + name,
                           point: .zero, delay: delay, count: count, text: text)
@@ -954,13 +956,13 @@ class ViewController: NSViewController {
     @objc private func onDeleteScenario() {
         let store = ScenarioStore.shared
         guard store.scenarios.count > 1 else {
-            AppLogger.shared.log("⚠️ 마지막 시나리오는 삭제할 수 없습니다.")
+            AppLogger.shared.log("⚠️ 마지막 플로우는 삭제할 수 없습니다.")
             return
         }
         guard store.scenarios.indices.contains(currentScenarioIndex) else { return }
 
         let alert = NSAlert()
-        alert.messageText = "시나리오를 삭제하시겠습니까?"
+        alert.messageText = "플로우를 삭제하시겠습니까?"
         alert.informativeText = store.scenarios[currentScenarioIndex].name
         alert.alertStyle = .warning
         alert.addButton(withTitle: "삭제")
@@ -972,7 +974,7 @@ class ViewController: NSViewController {
             persistCurrentScenarioSelection()
             refreshScenarioPopup()
             loadCurrentScenario()
-            AppLogger.shared.log("🗑 시나리오 삭제: \(removedName)")
+            AppLogger.shared.log("🗑 플로우 삭제: \(removedName)")
         }
     }
 
@@ -1036,9 +1038,52 @@ class ViewController: NSViewController {
         self.task = Task { [weak self] in
             guard let self = self else { return }
             try? await self.runner.run(try! self.actions.value())
+
+            // The just-finished sequence asked us to chain to another
+            // scenario via a `.nextScenario` action. Move the popup +
+            // action list and kick off a fresh run. If we can't honour
+            // the request (no next scenario, unknown id, etc.) fall
+            // through and finish normally.
+            if let request = self.runner.nextScenarioRequest,
+               try! self.isRunning.value(),
+               self.advanceScenario(for: request) {
+                self.beginRun()
+                return
+            }
+
             self.isRunning.onNext(false)
             self.statusLabel.stringValue = L("✓ Done")
         }
+    }
+
+    /// Resolve the `.nextScenario` action's target and move the popup /
+    /// action list to it. Returns false when the request can't be honoured
+    /// (already at the last scenario for `.next`, or an unknown id for
+    /// `.specific`) so the caller knows to stop running.
+    private func advanceScenario(for request: AutomationRunner.NextScenarioRequest) -> Bool {
+        let store = ScenarioStore.shared
+        let target: Int
+        switch request {
+        case .next:
+            let nextIndex = currentScenarioIndex + 1
+            guard store.scenarios.indices.contains(nextIndex) else {
+                AppLogger.shared.log("➡️ 다음 플로우 없음 — 자동화 종료")
+                return false
+            }
+            target = nextIndex
+        case .specific(let id):
+            guard let idx = store.scenarios.firstIndex(where: { $0.id.uuidString == id }) else {
+                AppLogger.shared.log("⚠️ 플로우를 찾지 못함 (id=\(id)) — 자동화 종료")
+                return false
+            }
+            target = idx
+        }
+        currentScenarioIndex = target
+        persistCurrentScenarioSelection()
+        scenarioPopup.selectItem(at: target)
+        loadCurrentScenario()
+        AppLogger.shared.log("➡️ 플로우 전환: \(store.scenarios[target].name)")
+        return true
     }
 
     func saveKey(number: String, shift: Bool) {

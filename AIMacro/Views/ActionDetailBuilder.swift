@@ -287,6 +287,13 @@ final class ActionDetailBuilder {
                         control: makeActionSnapshotView(action, disposeBag: disposeBag),
                         hint: "윈도우 선택 직후 캡처된 영역")
             cards.append(card)
+
+        case .nextScenario:
+            let card = makeCard(title: L("Next Flow"))
+            card.addRow(label: L("Target"),
+                        control: makeNextScenarioPopup(action, disposeBag: disposeBag),
+                        hint: L("Stops the current flow and starts the next one in the list."))
+            cards.append(card)
         }
 
         return cards
@@ -371,6 +378,35 @@ final class ActionDetailBuilder {
         return row
     }
 
+    /// Pop-up for `.nextScenario` actions — first item routes "to the next
+    /// scenario in the list" (action.text == ""), the remaining items are
+    /// each scenario by name with the scenario UUID stored in action.text.
+    /// Stays in sync with `ScenarioStore` changes via the
+    /// `ScenarioStore.didChangeNotification`.
+    private func makeNextScenarioPopup(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.translatesAutoresizingMaskIntoConstraints = false
+
+        let bridge = NextScenarioPopupBridge(action: action, popup: popup)
+        popup.target = bridge
+        popup.action = #selector(NextScenarioPopupBridge.changed(_:))
+        objc_setAssociatedObject(popup, &Self.nextScenarioBridgeAssocKey,
+                                 bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        bridge.repopulate()
+
+        // Keep the items list fresh when scenarios are added / renamed /
+        // removed elsewhere in the app.
+        NotificationCenter.default.rx
+            .notification(ScenarioStore.didChangeNotification)
+            .observe(on: MainScheduler.instance)
+            .subscribe(onNext: { [weak bridge] _ in bridge?.repopulate() })
+            .disposed(by: disposeBag)
+        return popup
+    }
+
+    private static var nextScenarioBridgeAssocKey: UInt8 = 0
+
     /// 4-up direction selector for `.scroll` actions (↓ ↑ ← →). Persists
     /// the choice in `action.text` via `setScrollDirection`. Subscribes to
     /// `action.text` so a programmatic update (e.g. scroll recorder) flips
@@ -415,7 +451,7 @@ final class ActionDetailBuilder {
                               action: #selector(recordScroll(_:)))
         button.bezelStyle = .roundRect
         button.controlSize = .small
-        button.toolTip = "버튼을 누르고 마우스 휠 / 매직 마우스 / 트랙패드로 원하는 만큼 스크롤하세요. 0.6 초 이상 멈추면 자동 종료됩니다."
+        button.toolTip = "버튼을 누른 뒤 자유롭게 클릭(스크롤 전 클릭은 모두 무시) → 스크롤 → 한 번 더 클릭하면 녹화 종료."
         objc_setAssociatedObject(button, &Self.actionAssocKey,
                                  action, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         return button
@@ -1676,6 +1712,7 @@ enum ActionIcons {
         case .openChrome:   names = ["plus.rectangle.on.rectangle", "rectangle.on.rectangle"]
         case .openBrowser:  names = ["safari", "globe", "macwindow"]
         case .windowFrame:  names = ["macwindow", "rectangle"]
+        case .nextScenario: names = ["arrow.right.circle", "chevron.right.2", "arrow.right"]
         }
         let label = ActionIcons.label(for: type)
         for name in names {
@@ -1703,6 +1740,7 @@ enum ActionIcons {
         case .openChrome:           return "🆕"
         case .openBrowser:          return "🌐🪟"
         case .windowFrame:          return "🪟"
+        case .nextScenario:         return "➡️"
         }
     }
 
@@ -1721,6 +1759,7 @@ enum ActionIcons {
         case .openChrome:           return L("New Chrome Window")
         case .openBrowser:          return L("Browser")
         case .windowFrame:          return L("Window Frame")
+        case .nextScenario:         return L("Next Flow")
         }
     }
 }
@@ -2036,6 +2075,51 @@ private final class PickerCaptureSession {
         let key = NSDeviceDescriptionKey("NSScreenNumber")
         return NSScreen.screens.first { $0.frame.contains(point) }?
             .deviceDescription[key] as? CGDirectDisplayID
+    }
+}
+
+/// Popup bridge for `.nextScenario` actions. The popup's first item is
+/// "Next in list" (empty action.text); subsequent items are one per
+/// scenario, with the scenario UUID stored as the menu item's
+/// `representedObject`. Selecting an item writes that UUID (or empty
+/// string for "next in list") into `action.text`.
+private final class NextScenarioPopupBridge: NSObject {
+    private weak var action: AutoAction?
+    private let popup: NSPopUpButton
+
+    init(action: AutoAction, popup: NSPopUpButton) {
+        self.action = action
+        self.popup = popup
+    }
+
+    /// Rebuild the popup's items from the current `ScenarioStore` and
+    /// restore selection from `action.text`.
+    func repopulate() {
+        popup.removeAllItems()
+
+        let defaultItem = NSMenuItem(
+            title: NSLocalizedString("Next in list", comment: ""),
+            action: nil, keyEquivalent: "")
+        defaultItem.representedObject = ""
+        popup.menu?.addItem(defaultItem)
+
+        for scenario in ScenarioStore.shared.scenarios {
+            let item = NSMenuItem(title: scenario.name, action: nil, keyEquivalent: "")
+            item.representedObject = scenario.id.uuidString
+            popup.menu?.addItem(item)
+        }
+
+        let currentId = ((try? action?.text.value()) ?? "")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let idx = popup.menu?.items.firstIndex(where: {
+            ($0.representedObject as? String) == currentId
+        }) ?? 0
+        popup.selectItem(at: idx)
+    }
+
+    @objc func changed(_ sender: NSPopUpButton) {
+        let value = (sender.selectedItem?.representedObject as? String) ?? ""
+        action?.text.onNext(value)
     }
 }
 

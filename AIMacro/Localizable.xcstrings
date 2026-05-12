@@ -25,10 +25,10 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "동작 추가" } }
       }
     },
-    "Append new action to current scenario" : {
+    "Append new action to current flow" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "현재 시나리오 끝에 새 동작 추가" } }
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "현재 플로우 끝에 새 동작 추가" } }
       }
     },
     "Auto-start time — sequence runs when this time is reached" : {
@@ -85,10 +85,10 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "드래그" } }
       }
     },
-    "Duplicate current scenario" : {
+    "Duplicate current flow" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "현재 시나리오 복제" } }
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "현재 플로우 복제" } }
       }
     },
     "Height" : {
@@ -137,6 +137,42 @@
       "extractionState" : "manual",
       "localizations" : {
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "이름" } }
+      }
+    },
+    "Next Flow" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "다음 플로우" } }
+      }
+    },
+    "Behavior" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "동작" } }
+      }
+    },
+    "Target" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "대상 플로우" } }
+      }
+    },
+    "Next in list" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "다음 플로우 (목록 순서)" } }
+      }
+    },
+    "Stops the current flow and starts the next one in the list." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "현재 플로우를 종료하고 선택한 플로우를 새로 시작합니다." } }
+      }
+    },
+    "➡️  Next Flow" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "➡️  다음 플로우" } }
       }
     },
     "New Chrome Window" : {
@@ -199,10 +235,10 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "녹화" } }
       }
     },
-    "Rename / delete scenario" : {
+    "Rename / delete flow" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "시나리오 이름 변경 / 삭제" } }
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "플로우 이름 변경 / 삭제" } }
       }
     },
     "Repeat" : {

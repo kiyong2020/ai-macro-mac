@@ -92,7 +92,10 @@ class SettingsViewController: NSViewController, NSTextFieldDelegate {
     }
 
     @objc private func onRequestPermissions() {
-        Permissions.requestAll()
+        // Interactive mode: skip the preflight short-circuit and fall back
+        // to opening System Settings when macOS won't re-prompt for a
+        // previously-denied / already-decided permission.
+        Permissions.requestAll(interactive: true)
         AppLogger.shared.log("🔐 시스템 권한 재요청")
     }
 }

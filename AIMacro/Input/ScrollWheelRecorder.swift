@@ -1,21 +1,27 @@
 //
 //  ScrollWheelRecorder.swift
-//  AIMacro
+//  Macroony
 //
 //  Records a scroll gesture (mouse wheel, Magic Mouse top swipe, trackpad
 //  two-finger scroll — all share the same `.scrollWheel` event stream) by
-//  tapping the session-level event stream and consuming the events. Sums
-//  the per-event line/pixel deltas until the user stops scrolling for
-//  `idleTimeoutMs`, then reports the totals via `onEnd` so the caller can
-//  derive the dominant axis + tick count for the action.
+//  tapping the session-level event stream. Sums the per-event line/pixel
+//  deltas, then reports the totals via `onEnd`.
+//
+//  Termination model:
+//      1. Recorder starts.
+//      2. Any number of clicks the user does before scrolling are passed
+//         through normally — useful for navigating to / focusing the
+//         scrollable area without ending the gesture.
+//      3. The user scrolls — accumulates deltas.
+//      4. The next click *after a scroll has been seen* ends the recording.
+//         That terminating click is swallowed so it doesn't accidentally
+//         activate whatever's under the cursor.
 //
 //  Lifecycle:
 //      let rec = ScrollWheelRecorder()
 //      rec.onDelta = { dy, dx in … }    // optional live feedback
 //      rec.onEnd = { dy, dx in … }
 //      rec.start()
-//      // (user scrolls)
-//      // rec auto-stops after idleTimeoutMs of silence, then fires onEnd.
 //
 
 import Cocoa
@@ -25,28 +31,30 @@ final class ScrollWheelRecorder {
     /// Fired on every `.scrollWheel` event. Use for a live preview if needed
     /// — totals are also reported in `onEnd`.
     var onDelta: ((CGFloat, CGFloat) -> Void)?
-    /// Fired once after the gesture has been idle for `idleTimeoutMs`. The
-    /// arguments are the running totals (line units) on the vertical and
-    /// horizontal axes, signed per the system's natural-scrolling setting.
-    /// The recorder auto-stops before this fires.
+    /// Fired once when the user clicks after scrolling. Arguments are the
+    /// running totals (line units) on the vertical and horizontal axes,
+    /// signed per the system's natural-scrolling setting. The recorder
+    /// auto-stops before this fires.
     var onEnd: ((CGFloat, CGFloat) -> Void)?
-
-    /// Time of inactivity that ends the recording session. 600 ms is a
-    /// comfortable threshold — longer than a single wheel-click but well
-    /// shorter than the user's reaction time to a fresh gesture.
-    var idleTimeoutMs: Int = 600
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var idleTimer: Timer?
     private var sumDy: CGFloat = 0
     private var sumDx: CGFloat = 0
-    private var didReceiveAny = false
+    /// True once at least one scroll event has been captured. Used to
+    /// gate the click-to-end behaviour: clicks while this is false (i.e.
+    /// before any scrolling) pass through and are ignored; the first
+    /// click after this flips to true ends the recording.
+    private var hasScrolled = false
 
     func start() {
         guard eventTap == nil else { return }
 
-        let mask: CGEventMask = (1 << CGEventType.scrollWheel.rawValue)
+        let mask: CGEventMask =
+            (1 << CGEventType.scrollWheel.rawValue) |
+            (1 << CGEventType.leftMouseDown.rawValue) |
+            (1 << CGEventType.rightMouseDown.rawValue)
+
         let userInfo = Unmanaged.passUnretained(self).toOpaque()
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -67,7 +75,7 @@ final class ScrollWheelRecorder {
         self.runLoopSource = source
         self.sumDy = 0
         self.sumDx = 0
-        self.didReceiveAny = false
+        self.hasScrolled = false
     }
 
     func stop() {
@@ -79,31 +87,33 @@ final class ScrollWheelRecorder {
         }
         eventTap = nil
         runLoopSource = nil
-        idleTimer?.invalidate()
-        idleTimer = nil
     }
 
     /// Aborts the session without firing `onEnd`. Caller is responsible for
     /// resetting any UI it armed.
     func cancel() {
-        idleTimer?.invalidate()
-        idleTimer = nil
         stop()
     }
 
-    fileprivate func handle(deltaY: CGFloat, deltaX: CGFloat) {
-        didReceiveAny = true
-        sumDy += deltaY
-        sumDx += deltaX
-        onDelta?(deltaY, deltaX)
+    /// Per-event handler called from the C callback. Returns a tuple
+    /// describing how the underlying event should be routed:
+    ///   - `consume == true`: the callback swallows the event (return nil)
+    ///   - `consume == false`: the event passes through unchanged
+    fileprivate func handle(scrollDeltaY dy: CGFloat, deltaX dx: CGFloat) {
+        hasScrolled = true
+        sumDy += dy
+        sumDx += dx
+        onDelta?(dy, dx)
+    }
 
-        idleTimer?.invalidate()
-        idleTimer = Timer.scheduledTimer(
-            withTimeInterval: TimeInterval(idleTimeoutMs) / 1000.0,
-            repeats: false
-        ) { [weak self] _ in
-            self?.finalize()
-        }
+    /// Returns true when the click should be swallowed (it's the
+    /// terminating click after a scroll). When the recorder hasn't seen a
+    /// scroll yet, the click is passed through so the user can position
+    /// the cursor.
+    fileprivate func handleClick() -> Bool {
+        guard hasScrolled else { return false }
+        finalize()
+        return true
     }
 
     private func finalize() {
@@ -114,17 +124,16 @@ final class ScrollWheelRecorder {
     }
 
     deinit {
-        // Match MouseDragRecorder: tear the tap down on dealloc so the
-        // C callback can't dereference our dangling unretained pointer.
+        // Belt-and-braces: tear the tap down on dealloc so the C callback
+        // can't dereference our dangling unretained pointer.
         stop()
     }
 }
 
-/// CGEventTap C callback. Reads line + point deltas (`.scrollWheelEventDelta…`
-/// is what physical wheels produce, point delta covers Magic Mouse swipe
-/// and trackpad continuous scroll). Passes the event through unchanged so
-/// the user gets live scroll feedback in the app under the cursor while
-/// the recorder accumulates totals.
+/// CGEventTap C callback. Scroll events update the running totals and pass
+/// through; mouse-down events either pass through (first click, used for
+/// positioning) or get swallowed and end the recording (any click after a
+/// scroll).
 private func scrollRecorderCallback(
     proxy: CGEventTapProxy,
     type: CGEventType,
@@ -133,7 +142,9 @@ private func scrollRecorderCallback(
 ) -> Unmanaged<CGEvent>? {
     guard let userInfo = userInfo else { return Unmanaged.passRetained(event) }
     let recorder = Unmanaged<ScrollWheelRecorder>.fromOpaque(userInfo).takeUnretainedValue()
-    if type == .scrollWheel {
+
+    switch type {
+    case .scrollWheel:
         let lineDy = CGFloat(event.getIntegerValueField(.scrollWheelEventDeltaAxis1))
         let lineDx = CGFloat(event.getIntegerValueField(.scrollWheelEventDeltaAxis2))
         let dy: CGFloat
@@ -149,7 +160,16 @@ private func scrollRecorderCallback(
             dy = pdy / 10
             dx = pdx / 10
         }
-        recorder.handle(deltaY: dy, deltaX: dx)
+        recorder.handle(scrollDeltaY: dy, deltaX: dx)
+        return Unmanaged.passRetained(event)
+
+    case .leftMouseDown, .rightMouseDown:
+        if recorder.handleClick() {
+            return nil   // swallow the terminating click
+        }
+        return Unmanaged.passRetained(event)
+
+    default:
+        return Unmanaged.passRetained(event)
     }
-    return Unmanaged.passRetained(event)
 }
