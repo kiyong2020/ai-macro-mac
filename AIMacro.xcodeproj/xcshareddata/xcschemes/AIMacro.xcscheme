@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "71DDDC312E12BAD800AC2765"
-               BuildableName = "AIMacro.app"
+               BuildableName = "Macroony.app"
                BlueprintName = "AIMacro"
                ReferencedContainer = "container:AIMacro.xcodeproj">
             </BuildableReference>
@@ -45,7 +45,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "71DDDC312E12BAD800AC2765"
-            BuildableName = "AIMacro.app"
+            BuildableName = "Macroony.app"
             BlueprintName = "AIMacro"
             ReferencedContainer = "container:AIMacro.xcodeproj">
          </BuildableReference>
@@ -62,7 +62,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "71DDDC312E12BAD800AC2765"
-            BuildableName = "AIMacro.app"
+            BuildableName = "Macroony.app"
             BlueprintName = "AIMacro"
             ReferencedContainer = "container:AIMacro.xcodeproj">
          </BuildableReference>

@@ -23,4 +23,13 @@ enum Preferences {
         get { UserDefaults.standard.string(forKey: "lastScenarioId") }
         set { UserDefaults.standard.set(newValue, forKey: "lastScenarioId") }
     }
+
+    /// Whether the bottom log view is expanded. Persisted so the user's
+    /// preferred layout survives relaunches. Default: closed — log only
+    /// shows what's happening during a run, so most of the time it's
+    /// empty and the table view benefits from the extra vertical space.
+    static var isLogOpen: Bool {
+        get { (UserDefaults.standard.object(forKey: "isLogOpen") as? Bool) ?? false }
+        set { UserDefaults.standard.set(newValue, forKey: "isLogOpen") }
+    }
 }

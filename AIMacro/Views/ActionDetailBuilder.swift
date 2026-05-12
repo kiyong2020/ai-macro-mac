@@ -71,7 +71,7 @@ final class ActionDetailBuilder {
     // MARK: - Empty state
 
     private func makeEmptyState() -> NSView {
-        let label = NSTextField(labelWithString: "왼쪽에서 액션을 선택하세요")
+        let label = NSTextField(labelWithString: L("Select an action from the left"))
         label.font = .systemFont(ofSize: 14)
         label.textColor = .tertiaryLabelColor
         let host = NSView()
@@ -154,10 +154,10 @@ final class ActionDetailBuilder {
         var cards: [NSView] = []
 
         // "기본" card: name + delay (delay is meaningful for almost every type).
-        let basic = makeCard(title: "기본")
-        basic.addRow(label: "이름", control: makeNameField(action, disposeBag: disposeBag))
+        let basic = makeCard(title: L("Basic"))
+        basic.addRow(label: L("Name"), control: makeNameField(action, disposeBag: disposeBag))
         if shouldShowDelay(for: action.type) {
-            basic.addRow(label: "지연 시간",
+            basic.addRow(label: L("Delay"),
                          control: makeDelayField(action, disposeBag: disposeBag),
                          hint: "액션 실행 후 다음 단계까지 대기 (초)")
         }
@@ -166,124 +166,124 @@ final class ActionDetailBuilder {
         // Type-specific card.
         switch action.type {
         case .click:
-            let card = makeCard(title: "클릭 위치")
-            card.addRow(label: "좌표", control: makePointPicker(action, disposeBag: disposeBag),
+            let card = makeCard(title: L("Click Position"))
+            card.addRow(label: L("Position"), control: makePointPicker(action, disposeBag: disposeBag),
                         hint: "버튼을 누르고 화면에서 위치를 클릭")
-            card.addRow(label: "버튼",
+            card.addRow(label: L("Button"),
                         control: makeClickButtonControl(action, disposeBag: disposeBag),
                         hint: "좌클릭 / 우클릭 선택")
-            card.addRow(label: "수정자",
+            card.addRow(label: L("Modifiers"),
                         control: makeClickModifiersControl(action, disposeBag: disposeBag),
                         hint: "클릭 시 함께 누를 키 (⌘ ⇧ ⌃ ⌥)")
-            card.addRow(label: "반복", control: makeCountField(action, disposeBag: disposeBag, suffix: "회"))
-            card.addRow(label: "미리보기",
+            card.addRow(label: L("Repeat"), control: makeCountField(action, disposeBag: disposeBag, suffix: "회"))
+            card.addRow(label: L("Preview"),
                         control: makeActionSnapshotView(action, disposeBag: disposeBag),
                         hint: "위치 지정 직후 캡처된 클릭 영역")
             cards.append(card)
 
         case .scroll:
-            let card = makeCard(title: "스크롤")
-            card.addRow(label: "방향",
+            let card = makeCard(title: L("Scroll"))
+            card.addRow(label: L("Direction"),
                         control: makeScrollDirectionControl(action, disposeBag: disposeBag),
-                        hint: "마우스 휠 / 매직 마우스 스위프 시뮬레이션")
-            card.addRow(label: "반복",
+                        hint: L("Simulates mouse wheel / Magic Mouse swipe"))
+            card.addRow(label: L("Repeat"),
                         control: makeCountField(action, disposeBag: disposeBag, suffix: "틱"),
                         hint: "1틱 ≈ 휠 한 칸 (3줄)")
-            card.addRow(label: "녹화",
+            card.addRow(label: L("Record"),
                         control: makeScrollRecorderButton(action, disposeBag: disposeBag),
                         hint: "버튼을 누른 뒤 실제로 스크롤하면 방향·틱 수가 자동 입력")
             cards.append(card)
 
         case .drag:
-            let card = makeCard(title: "드래그")
-            card.addRow(label: "경로",
+            let card = makeCard(title: L("Drag"))
+            card.addRow(label: L("Path"),
                         control: makeDragRecorder(action, disposeBag: disposeBag),
                         hint: "녹화 버튼을 누른 뒤 실제로 마우스를 드래그하세요")
-            card.addRow(label: "반복", control: makeCountField(action, disposeBag: disposeBag, suffix: "회"))
-            card.addRow(label: "미리보기",
+            card.addRow(label: L("Repeat"), control: makeCountField(action, disposeBag: disposeBag, suffix: "회"))
+            card.addRow(label: L("Preview"),
                         control: makeActionSnapshotView(action, disposeBag: disposeBag),
                         hint: "드래그 시작 위치에서 캡처된 영역")
             cards.append(card)
 
         case .key:
-            let card = makeCard(title: "키 입력")
+            let card = makeCard(title: L("Key"))
             let custom = makeCustomKeyControl(action, disposeBag: disposeBag)
             // 모드 드롭다운이 곧 라벨 역할 — 별도의 "키" 라벨은 두지 않음.
             card.addRow(labelView: custom.modePopup,
                         control: custom.control,
                         hint: "키 모드: 클릭 후 단축키 입력 / 텍스트 모드: 자유 입력")
-            card.addRow(label: "반복", control: makeCountField(action, disposeBag: disposeBag, suffix: "회"))
+            card.addRow(label: L("Repeat"), control: makeCountField(action, disposeBag: disposeBag, suffix: "회"))
             cards.append(card)
 
         case .wait:
             cards.append(makeWaitCard(action, disposeBag: disposeBag))
 
         case .ocr:
-            let card = makeCard(title: "OCR 검색")
-            card.addRow(label: "타겟 좌표",
+            let card = makeCard(title: L("OCR Search"))
+            card.addRow(label: L("Target Position"),
                         control: makeOCRPointPicker(action, disposeBag: disposeBag),
                         hint: "클릭하면 라이브 OCR 미리보기가 마우스를 따라 움직입니다")
-            card.addRow(label: "찾을 텍스트",
+            card.addRow(label: L("Search Text"),
                         control: makeTextField(action, disposeBag: disposeBag, placeholder: "예: 09:00"),
                         hint: "캡처 영역에서 이 텍스트를 인식하면 클릭")
-            card.addRow(label: "스캔 영역",
+            card.addRow(label: L("Scan Area"),
                         control: makeScanSizeControl(action, disposeBag: disposeBag),
                         hint: "타겟 좌표를 중심으로 한 정사각형 캡처 영역 (50–600 px)")
-            card.addRow(label: "미리보기",
+            card.addRow(label: L("Preview"),
                         control: makeActionSnapshotView(action, disposeBag: disposeBag),
                         hint: "위치 지정 직후 캡처된 스캔 영역")
             cards.append(card)
 
         case .script:
-            let card = makeCard(title: "스크립트")
-            card.addRow(label: "타겟 좌표",
+            let card = makeCard(title: L("Script"))
+            card.addRow(label: L("Target Position"),
                         control: makePointPicker(action, disposeBag: disposeBag))
-            card.addRow(label: "텍스트 인자",
+            card.addRow(label: L("Text Argument"),
                         control: makeTextField(action, disposeBag: disposeBag,
                                                placeholder: "${TEXT} 자리표시자 값"),
                         hint: "코드 안의 ${TEXT} 가 이 값으로 치환됩니다")
             cards.append(card)
 
         case .setURL, .openChrome:
-            let card = makeCard(title: action.type.isOpenChrome ? "새 Chrome 창" : "URL 설정")
+            let card = makeCard(title: action.type.isOpenChrome ? L("New Chrome Window") : L("URL Settings"))
             // The default URL is taken from the enum payload; pre-fill if blank.
             if (try? action.text.value())?.isEmpty == true {
                 action.text.onNext(action.type.defaultURL ?? "")
             }
-            card.addRow(label: "URL",
+            card.addRow(label: L("URL"),
                         control: makeTextField(action, disposeBag: disposeBag,
                                                placeholder: "https://..."))
             cards.append(card)
 
         case .openBrowser:
-            let card = makeCard(title: "브라우저")
+            let card = makeCard(title: L("Browser"))
             seedBrowserDefaults(action)
-            card.addRow(label: "URL",
+            card.addRow(label: L("URL"),
                         control: makeBrowserURLField(action, disposeBag: disposeBag,
                                                      placeholder: "https://..."),
-                        hint: "디폴트 브라우저로 열림 (Chrome / Safari / Edge 등)")
-            card.addRow(label: "너비",
+                        hint: L("Opens in default browser (Chrome / Safari / Edge etc.)"))
+            card.addRow(label: L("Width"),
                         control: makeBrowserSizeControl(action, axis: .width,
                                                         disposeBag: disposeBag),
                         hint: "창 너비 (px)")
-            card.addRow(label: "높이",
+            card.addRow(label: L("Height"),
                         control: makeBrowserSizeControl(action, axis: .height,
                                                         disposeBag: disposeBag),
                         hint: "창 높이 (px)")
-            card.addRow(label: "위치",
+            card.addRow(label: L("Location"),
                         control: makeBrowserPositionPicker(action, disposeBag: disposeBag),
                         hint: "버튼을 누르고 화면에서 창 중심이 될 위치를 클릭")
-            card.addRow(label: "미리보기",
+            card.addRow(label: L("Preview"),
                         control: makeActionSnapshotView(action, disposeBag: disposeBag),
                         hint: "위치 지정 직후 캡처된 창 영역")
             cards.append(card)
 
         case .windowFrame:
-            let card = makeCard(title: "창 프레임")
-            card.addRow(label: "저장된 프레임",
+            let card = makeCard(title: L("Window Frame"))
+            card.addRow(label: L("Saved Frame"),
                         control: makeWindowFrameRow(action, disposeBag: disposeBag),
                         hint: "x, y, width, height")
-            card.addRow(label: "미리보기",
+            card.addRow(label: L("Preview"),
                         control: makeActionSnapshotView(action, disposeBag: disposeBag),
                         hint: "윈도우 선택 직후 캡처된 영역")
             cards.append(card)
@@ -410,7 +410,7 @@ final class ActionDetailBuilder {
     /// accumulates deltas until the user pauses, then auto-fills direction
     /// and tick count on the action.
     private func makeScrollRecorderButton(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
-        let button = NSButton(title: "🎯 스크롤 녹화",
+        let button = NSButton(title: L("🎯 Record Scroll"),
                               target: self,
                               action: #selector(recordScroll(_:)))
         button.bezelStyle = .roundRect
@@ -647,14 +647,14 @@ final class ActionDetailBuilder {
                 guard let action = action else { return }
                 let f = action.browserFrame
                 if f == .zero || (f.width == 0 && f.height == 0) {
-                    display.stringValue = "  (미설정)"
+                    display.stringValue = "  " + L("(Not set)")
                 } else {
                     display.stringValue = "  중심 (\(Int(f.midX)), \(Int(f.midY)))"
                 }
             })
             .disposed(by: disposeBag)
 
-        let pickButton = NSButton(title: "📍 위치 선택", target: self,
+        let pickButton = NSButton(title: L("📍 Pick Location"), target: self,
                                   action: #selector(pickBrowserPosition(_:)))
         pickButton.bezelStyle = .roundRect
         pickButton.controlSize = .small
@@ -728,11 +728,11 @@ final class ActionDetailBuilder {
     /// has no extra config). Default mode is `.time`, which is what the
     /// picker menu seeds for new wait actions.
     private func makeWaitCard(_ action: AutoAction, disposeBag: DisposeBag) -> CardView {
-        let card = makeCard(title: "대기")
+        let card = makeCard(title: L("Wait"))
 
         // Ordered list of all sub-types — segment / popup index → enum.
         let waitTypes: [AutoAction.WaitType] = [.time, .click, .enter]
-        let labels = ["시간 대기", "클릭 대기", "엔터 대기"]
+        let labels = [L("Wait Time"), L("Wait Click"), L("Wait Enter")]
         let popup = NSPopUpButton(frame: .zero, pullsDown: false)
         popup.addItems(withTitles: labels)
         let currentWait: AutoAction.WaitType
@@ -779,9 +779,9 @@ final class ActionDetailBuilder {
         objc_setAssociatedObject(popup, &Self.waitTypeBridgeAssocKey,
                                  bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 
-        card.addRow(label: "타입", control: popup,
+        card.addRow(label: L("Type"), control: popup,
                     hint: "기본값은 시간 대기")
-        card.addRow(label: "옵션", control: optionContainer)
+        card.addRow(label: L("Options"), control: optionContainer)
         return card
     }
 
@@ -845,7 +845,7 @@ final class ActionDetailBuilder {
         imageView.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         imageView.translatesAutoresizingMaskIntoConstraints = false
 
-        let placeholder = NSTextField(labelWithString: "(아직 캡처되지 않음)")
+        let placeholder = NSTextField(labelWithString: L("(Not captured yet)"))
         placeholder.font = .systemFont(ofSize: 11)
         placeholder.textColor = .tertiaryLabelColor
         placeholder.alignment = .center
@@ -1009,11 +1009,11 @@ final class ActionDetailBuilder {
         action.point
             .observe(on: MainScheduler.instance)
             .subscribe(onNext: { p in
-                display.stringValue = (p == .zero ? "  (미설정)" : "  \(Int(p.x)), \(Int(p.y))")
+                display.stringValue = (p == .zero ? "  " + L("(Not set)") : "  \(Int(p.x)), \(Int(p.y))")
             })
             .disposed(by: disposeBag)
 
-        let pickButton = NSButton(title: "📍 위치 지정", target: self,
+        let pickButton = NSButton(title: L("📍 Pick Position"), target: self,
                                   action: #selector(pickOCRPoint(_:)))
         pickButton.bezelStyle = .roundRect
         pickButton.controlSize = .small
@@ -1044,11 +1044,11 @@ final class ActionDetailBuilder {
         action.point
             .observe(on: MainScheduler.instance)
             .subscribe(onNext: { p in
-                display.stringValue = (p == .zero ? "  (미설정)" : "  \(Int(p.x)), \(Int(p.y))")
+                display.stringValue = (p == .zero ? "  " + L("(Not set)") : "  \(Int(p.x)), \(Int(p.y))")
             })
             .disposed(by: disposeBag)
 
-        let pickButton = NSButton(title: "📍 위치 지정", target: self,
+        let pickButton = NSButton(title: L("📍 Pick Position"), target: self,
                                   action: #selector(pickPoint(_:)))
         pickButton.bezelStyle = .roundRect
         pickButton.controlSize = .small
@@ -1087,7 +1087,7 @@ final class ActionDetailBuilder {
             let start = (try? action.point.value()) ?? .zero
             let waypoints = action.dragWaypoints
             if start == .zero && waypoints.isEmpty {
-                summary.stringValue = "  (녹화되지 않음)"
+                summary.stringValue = "  " + L("(Not recorded)")
                 return
             }
             let endStr: String
@@ -1110,7 +1110,7 @@ final class ActionDetailBuilder {
             .subscribe(onNext: { _ in refresh() })
             .disposed(by: disposeBag)
 
-        let recordButton = NSButton(title: "🎯 드래그 녹화",
+        let recordButton = NSButton(title: L("🎯 Record Drag"),
                                     target: self,
                                     action: #selector(recordDrag(_:)))
         recordButton.bezelStyle = .roundRect
@@ -1287,20 +1287,22 @@ final class ActionDetailBuilder {
             .observe(on: MainScheduler.instance)
             .subscribe(onNext: { [weak action] _ in
                 let s = action?.encodedFrame ?? ""
-                display.stringValue = s.isEmpty ? "  (미설정)" : "  \(s)"
+                display.stringValue = s.isEmpty ? "  " + L("(Not set)") : "  \(s)"
             })
             .disposed(by: disposeBag)
 
-        let pickButton = NSButton(title: "📍 윈도우 선택", target: self,
+        let pickButton = NSButton(title: L("📍 Pick Window"), target: self,
                                   action: #selector(pickWindow(_:)))
         pickButton.bezelStyle = .roundRect
         pickButton.controlSize = .small
+        pickButton.toolTip = "버튼을 누르고 기준 윈도우를 클릭하면 그 위치/크기를 저장"
         objc_setAssociatedObject(pickButton, &Self.actionAssocKey, action, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 
-        let restore = NSButton(title: "🪟 복원", target: self, action: #selector(restoreWindow(_:)))
+        let restore = NSButton(title: L("🪟 Restore"), target: self, action: #selector(restoreWindow(_:)))
         restore.bezelStyle = .roundRect
         restore.controlSize = .small
         restore.contentTintColor = .controlAccentColor
+        restore.toolTip = "저장된 좌표 위치의 윈도우에 프레임을 즉시 적용 (테스트용)"
         objc_setAssociatedObject(restore, &Self.actionAssocKey, action, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 
         let row = NSStackView(views: [display, pickButton, restore])
@@ -1706,19 +1708,19 @@ enum ActionIcons {
 
     static func label(for type: AutoAction.ActionType) -> String {
         switch type {
-        case .click:                return "클릭"
-        case .scroll:               return "스크롤"
-        case .drag:                 return "드래그"
-        case .key:                  return "키 입력"
-        case .wait(.click):         return "클릭 대기"
-        case .wait(.enter):         return "엔터 대기"
-        case .wait(.time):          return "시간 대기"
-        case .ocr:                  return "OCR 클릭"
-        case .script:               return "스크립트 실행"
-        case .setURL:               return "URL 설정"
-        case .openChrome:           return "새 Chrome 창"
-        case .openBrowser:          return "브라우저"
-        case .windowFrame:          return "창 프레임"
+        case .click:                return L("Click")
+        case .scroll:               return L("Scroll")
+        case .drag:                 return L("Drag")
+        case .key:                  return L("Key")
+        case .wait(.click):         return L("Wait Click")
+        case .wait(.enter):         return L("Wait Enter")
+        case .wait(.time):          return L("Wait Time")
+        case .ocr:                  return L("OCR Click")
+        case .script:               return L("Run Script")
+        case .setURL:               return L("URL Settings")
+        case .openChrome:           return L("New Chrome Window")
+        case .openBrowser:          return L("Browser")
+        case .windowFrame:          return L("Window Frame")
         }
     }
 }

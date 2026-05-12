@@ -1,0 +1,50 @@
+/* AIMacro / Macroony — Korean storyboard overrides */
+/* Keys are storyboard object IDs from Base.lproj/Main.storyboard. */
+
+/* App menu (Macroony) */
+"5kV-Vb-QxS.title" = "Macroony 정보";
+"BOF-NM-1cW.title" = "설정…";
+"NMo-om-nkz.title" = "서비스";
+"hz9-B4-Xy5.title" = "서비스";
+"Olw-nP-bQN.title" = "Macroony 가리기";
+"Vdr-fp-XzO.title" = "기타 가리기";
+"Kd2-mp-pUS.title" = "모두 보기";
+"4sb-4s-VLi.title" = "Macroony 종료";
+
+/* Top-level menus */
+"dMs-cI-mzQ.title" = "파일";
+"bib-Uj-vzu.title" = "파일";
+"5QF-Oa-p0T.title" = "편집";
+"W48-6f-4Dl.title" = "편집";
+
+/* File submenu */
+"Was-JA-tGl.title" = "새로 만들기";
+"IAo-SY-fd9.title" = "열기…";
+"tXI-mr-wws.title" = "최근 사용한 항목 열기";
+"oas-Oc-fiZ.title" = "최근 사용한 항목 열기";
+"vNY-rz-j42.title" = "메뉴 지우기";
+"DVo-aG-piG.title" = "닫기";
+"pxx-59-PXV.title" = "저장…";
+"Bw7-FT-i3A.title" = "다른 이름으로 저장…";
+"KaW-ft-85H.title" = "저장된 상태로 되돌리기";
+"qIS-W8-SiK.title" = "페이지 설정…";
+"aTl-1u-JFS.title" = "프린트…";
+
+/* Edit submenu */
+"dRJ-4n-Yzg.title" = "실행 취소";
+"6dh-zS-Vam.title" = "다시 실행";
+"uRl-iY-unG.title" = "오려두기";
+"x3v-GG-iWU.title" = "복사하기";
+"gVA-U4-sdL.title" = "붙여넣기";
+"WeT-3V-zwk.title" = "스타일에 맞게 붙여넣기";
+"pa3-QI-u2k.title" = "삭제";
+"Ruw-6m-B2m.title" = "모두 선택";
+"4EN-yA-p0u.title" = "찾기";
+"1b7-l0-nxx.title" = "찾기";
+"Xz5-n4-O0W.title" = "찾기…";
+"YEy-JH-Tfz.title" = "찾기 및 대치…";
+"q09-fT-Sye.title" = "다음 찾기";
+"OwM-mh-QMV.title" = "이전 찾기";
+
+/* Help menu */
+"FKE-Sm-Kum.title" = "Macroony 도움말";

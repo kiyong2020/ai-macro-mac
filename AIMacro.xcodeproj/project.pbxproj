@@ -13,7 +13,7 @@
 /* Begin PBXFileReference section */
 		2E431BBB1592501CBAB7CAD8 /* Pods_AIMacro.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_AIMacro.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		65AE07040F50ECABD7A34717 /* Pods-AIMacro.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-AIMacro.release.xcconfig"; path = "Target Support Files/Pods-AIMacro/Pods-AIMacro.release.xcconfig"; sourceTree = "<group>"; };
-		71DDDC322E12BAD800AC2765 /* AIMacro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AIMacro.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		71DDDC322E12BAD800AC2765 /* Macroony.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Macroony.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A4E95C319759B78EBA28B157 /* Pods-AIMacro.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-AIMacro.debug.xcconfig"; path = "Target Support Files/Pods-AIMacro/Pods-AIMacro.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -50,7 +50,7 @@
 		71DDDC332E12BAD800AC2765 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				71DDDC322E12BAD800AC2765 /* AIMacro.app */,
+				71DDDC322E12BAD800AC2765 /* Macroony.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -94,7 +94,7 @@
 			);
 			name = AIMacro;
 			productName = AIMacro;
-			productReference = 71DDDC322E12BAD800AC2765 /* AIMacro.app */;
+			productReference = 71DDDC322E12BAD800AC2765 /* Macroony.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -118,6 +118,7 @@
 			knownRegions = (
 				en,
 				Base,
+				ko,
 			);
 			mainGroup = 71DDDC292E12BAD800AC2765;
 			minimizedProjectReferenceProxies = 1;
@@ -330,7 +331,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 98Z4K54Q7F;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
@@ -341,7 +342,7 @@
 				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "My Golf";
+				INFOPLIST_KEY_CFBundleDisplayName = Macroony;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "스크린 내용을 캡처하려면 권한이 필요해요.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMainStoryboardFile = Main;
@@ -352,9 +353,9 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
-				MARKETING_VERSION = 1.2.7;
+				MARKETING_VERSION = 0.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.minseyesoft.aimacro;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = Macroony;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
@@ -379,7 +380,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 98Z4K54Q7F;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
@@ -390,7 +391,7 @@
 				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "My Golf";
+				INFOPLIST_KEY_CFBundleDisplayName = Macroony;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "스크린 내용을 캡처하려면 권한이 필요해요.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMainStoryboardFile = Main;
@@ -401,9 +402,9 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
-				MARKETING_VERSION = 1.2.7;
+				MARKETING_VERSION = 0.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.minseyesoft.aimacro;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = Macroony;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;

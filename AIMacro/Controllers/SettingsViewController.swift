@@ -15,7 +15,7 @@ class SettingsWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "설정"
+        window.title = L("Settings")
         window.contentViewController = vc
         let wc = SettingsWindowController(window: window)
         return wc
@@ -71,17 +71,17 @@ class SettingsViewController: NSViewController, NSTextFieldDelegate {
         // point appears to be ignored.
         randomDelayField.placeholderString = "0.0"
         randomDelayField.alignment = .right
-        addRow(title: "랜덤 딜레이 최대(초):", field: randomDelayField, y: y)
+        addRow(title: L("Max random delay (sec):"), field: randomDelayField, y: y)
         y -= 36
 
         // Permission request button — re-triggers the three TCC prompts so
         // the user can re-grant access without restarting the app.
-        permissionButton.title = "권한 요청"
+        permissionButton.title = L("Request")
         permissionButton.bezelStyle = .rounded
         permissionButton.target = self
         permissionButton.action = #selector(onRequestPermissions)
-        permissionButton.toolTip = "손쉬운 사용 / 화면 기록 / Apple Events 권한을 한 번에 요청합니다."
-        addRow(title: "시스템 권한:", field: permissionButton, y: y, height: 28)
+        permissionButton.toolTip = L("Request Accessibility / Screen Recording / Apple Events at once.")
+        addRow(title: L("System permissions:"), field: permissionButton, y: y, height: 28)
     }
 
     func controlTextDidChange(_ obj: Notification) {

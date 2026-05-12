@@ -39,6 +39,12 @@ class ViewController: NSViewController {
 
     private let isRunning = BehaviorSubject(value: false)
     private var logTextView: NSTextView!
+    /// The log area's scroll view + the height constraint we animate when
+    /// the user toggles it open/closed via `logToggleButton`.
+    private var logScrollView: NSScrollView!
+    private var logHeightConstraint: NSLayoutConstraint!
+    private var logToggleButton: NSButton!
+    private let logOpenHeight: CGFloat = 140
 
     // Programmatic status panel widgets (built in setupStatusPanel)
     private var statusLabel: NSTextField!
@@ -69,6 +75,8 @@ class ViewController: NSViewController {
         setupStatusAndLogView()
 
         datePicker.dateValue = Date()
+        datePicker.toolTip = L("Auto-start time — sequence runs when this time is reached")
+        startButton.toolTip = L("Start / Stop")
         tableView.dataSource = self
         tableView.delegate = self
         tableView.rowHeight = -1
@@ -80,6 +88,7 @@ class ViewController: NSViewController {
         bindKeyboardListener()
 
         setupScenarioControls()
+        setupSettingsButtonIcon()
         setupMasterDetailLayout()
         setupActionTableMenu()
         restoreLastSelectedScenario()
@@ -127,11 +136,12 @@ class ViewController: NSViewController {
         // view's existing top constraint and re-anchor it just below the
         // button so the storyboard's top-of-table position becomes the
         // top-of-button position.
-        let addButton = NSButton(title: "＋ 동작 추가",
+        let addButton = NSButton(title: L("＋ Add Action"),
                                  target: self,
                                  action: #selector(showAppendActionMenu(_:)))
         addButton.bezelStyle = .roundRect
         addButton.controlSize = .regular
+        addButton.toolTip = L("Append new action to current scenario")
         addButton.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(addButton)
 
@@ -225,6 +235,32 @@ class ViewController: NSViewController {
 
     // MARK: - View setup
 
+    @objc private func toggleLogView() {
+        applyLogVisibility(open: !Preferences.isLogOpen, animated: true)
+    }
+
+    private func applyLogVisibility(open: Bool, animated: Bool) {
+        Preferences.isLogOpen = open
+        let symbol = open ? "chevron.down" : "chevron.up"
+        logToggleButton.image = NSImage(systemSymbolName: symbol,
+                                        accessibilityDescription: "로그 토글")
+        // Hide the scroll view when collapsed so it doesn't intercept clicks
+        // or render a sliver behind layer-backed content.
+        logScrollView.isHidden = !open
+        let newHeight: CGFloat = open ? logOpenHeight : 0
+        guard animated else {
+            logHeightConstraint.constant = newHeight
+            view.layoutSubtreeIfNeeded()
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.18
+            ctx.allowsImplicitAnimation = true
+            self.logHeightConstraint.animator().constant = newHeight
+            self.view.layoutSubtreeIfNeeded()
+        }, completionHandler: nil)
+    }
+
     private func setupStatusAndLogView() {
         // Repurpose imageView as a thin spacer; we no longer display anything in it.
         for c in imageView.constraints where c.firstAttribute == .height {
@@ -251,7 +287,7 @@ class ViewController: NSViewController {
         statusPanel.layer?.backgroundColor = NSColor(white: 0, alpha: 0.04).cgColor
 
         statusLabel = makeLabel(font: .systemFont(ofSize: 13, weight: .medium))
-        statusLabel.stringValue = "준비"
+        statusLabel.stringValue = L("Ready")
         progressLabel = makeLabel(font: .monospacedDigitSystemFont(ofSize: 11, weight: .regular),
                                   alignment: .right, color: .secondaryLabelColor)
         errorLabel = makeLabel(font: .systemFont(ofSize: 11), color: .systemRed)
@@ -264,15 +300,35 @@ class ViewController: NSViewController {
         progressBar.doubleValue = 0
         progressBar.isHidden = true
 
+        // Chevron toggle for opening / closing the bottom log view. Lives in
+        // the status panel's top-right corner so it stays visible whether
+        // the log itself is open or collapsed.
+        let toggleBtn = NSButton()
+        toggleBtn.bezelStyle = .recessed
+        toggleBtn.isBordered = false
+        toggleBtn.imagePosition = .imageOnly
+        toggleBtn.contentTintColor = .secondaryLabelColor
+        toggleBtn.target = self
+        toggleBtn.action = #selector(toggleLogView)
+        toggleBtn.toolTip = L("Show / hide log")
+        toggleBtn.translatesAutoresizingMaskIntoConstraints = false
+        logToggleButton = toggleBtn
+
         statusPanel.addSubview(statusLabel)
         statusPanel.addSubview(progressLabel)
         statusPanel.addSubview(progressBar)
         statusPanel.addSubview(errorLabel)
+        statusPanel.addSubview(toggleBtn)
 
         NSLayoutConstraint.activate([
             statusLabel.leadingAnchor.constraint(equalTo: statusPanel.leadingAnchor, constant: 12),
             statusLabel.topAnchor.constraint(equalTo: statusPanel.topAnchor, constant: 6),
-            progressLabel.trailingAnchor.constraint(equalTo: statusPanel.trailingAnchor, constant: -12),
+            toggleBtn.trailingAnchor.constraint(equalTo: statusPanel.trailingAnchor, constant: -8),
+            toggleBtn.centerYAnchor.constraint(equalTo: statusLabel.centerYAnchor),
+            toggleBtn.widthAnchor.constraint(equalToConstant: 22),
+            toggleBtn.heightAnchor.constraint(equalToConstant: 18),
+            // Progress label sits just to the left of the toggle button.
+            progressLabel.trailingAnchor.constraint(equalTo: toggleBtn.leadingAnchor, constant: -8),
             progressLabel.centerYAnchor.constraint(equalTo: statusLabel.centerYAnchor),
             progressLabel.leadingAnchor.constraint(greaterThanOrEqualTo: statusLabel.trailingAnchor, constant: 8),
 
@@ -310,10 +366,11 @@ class ViewController: NSViewController {
 
         view.addSubview(statusPanel)
         view.addSubview(scrollView)
-        // Fixed heights so the table view above (whose bottom is anchored to
-        // imageView.top) can absorb whatever vertical space is left. Using
-        // greaterThanOrEqual here lets the panel/log over-stretch and collapses
-        // the table to 0pt.
+        logScrollView = scrollView
+        // The height constraint is animated when the user toggles the log
+        // open/closed. Captured here so `toggleLogView` can mutate it.
+        logHeightConstraint = scrollView.heightAnchor.constraint(equalToConstant: logOpenHeight)
+
         NSLayoutConstraint.activate([
             statusPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             statusPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -324,10 +381,11 @@ class ViewController: NSViewController {
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: statusPanel.bottomAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            scrollView.heightAnchor.constraint(equalToConstant: 140),
+            logHeightConstraint,
         ])
 
         bindLogView()
+        applyLogVisibility(open: Preferences.isLogOpen, animated: false)
     }
 
     private func makeLabel(font: NSFont,
@@ -531,7 +589,7 @@ class ViewController: NSViewController {
         // settings button on the right is the storyboard's existing 설정
         // button, already wired to `onSettings:`.
         let addBtn = smallButton("＋", #selector(onAddScenario))
-        addBtn.toolTip = "현재 시나리오 복제"
+        addBtn.toolTip = L("Duplicate current scenario")
 
         scenarioPopup = NSPopUpButton(frame: .zero, pullsDown: false)
         scenarioPopup.target = self
@@ -539,7 +597,7 @@ class ViewController: NSViewController {
         scenarioPopup.translatesAutoresizingMaskIntoConstraints = false
 
         scenarioEditButton = smallButton("편집", #selector(showScenarioEditPopover))
-        scenarioEditButton.toolTip = "시나리오 이름 변경 / 삭제"
+        scenarioEditButton.toolTip = L("Rename / delete scenario")
 
         let stack = NSStackView(views: [addBtn, scenarioPopup, scenarioEditButton])
         stack.orientation = .horizontal
@@ -556,6 +614,37 @@ class ViewController: NSViewController {
             stack.topAnchor.constraint(equalTo: groupTab.topAnchor),
             scenarioPopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
         ])
+    }
+
+    /// Replace the storyboard "설정" text button with a gear SF Symbol so
+    /// the toolbar reads as a row of consistent small icons. We don't have
+    /// an IBOutlet for the button, so locate it by walking the view tree
+    /// for the NSButton wired to `onSettings:`.
+    private func setupSettingsButtonIcon() {
+        func find(in view: NSView) -> NSButton? {
+            if let btn = view as? NSButton, btn.action == #selector(onSettings(_:)) {
+                return btn
+            }
+            for sub in view.subviews {
+                if let found = find(in: sub) { return found }
+            }
+            return nil
+        }
+        guard let btn = find(in: view) else { return }
+
+        let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
+        let symbolNames = ["gearshape", "gear"]
+        for name in symbolNames {
+            if let gear = NSImage(systemSymbolName: name, accessibilityDescription: "설정")?
+                .withSymbolConfiguration(cfg) {
+                btn.image = gear
+                btn.imagePosition = .imageOnly
+                btn.title = ""
+                btn.toolTip = L("Settings")
+                btn.contentTintColor = .secondaryLabelColor
+                break
+            }
+        }
     }
 
     private func refreshScenarioPopup() {
@@ -678,18 +767,18 @@ class ViewController: NSViewController {
         menu.delegate = self
 
         // Row clicked → 위에 추가 / 아래에 추가
-        insertAboveMenuItem = NSMenuItem(title: "위에 추가", action: nil, keyEquivalent: "")
+        insertAboveMenuItem = NSMenuItem(title: L("Insert Above"), action: nil, keyEquivalent: "")
         insertAboveMenuItem.submenu = makeActionTypeMenu(insertOffset: 0)
         menu.addItem(insertAboveMenuItem)
 
-        insertBelowMenuItem = NSMenuItem(title: "아래에 추가", action: nil, keyEquivalent: "")
+        insertBelowMenuItem = NSMenuItem(title: L("Insert Below"), action: nil, keyEquivalent: "")
         insertBelowMenuItem.submenu = makeActionTypeMenu(insertOffset: 1)
         menu.addItem(insertBelowMenuItem)
 
         // Empty area clicked → 동작 추가 (append). The submenu's items also
         // route through `insertActionFromMenu`, which appends when
         // `tableView.clickedRow < 0`.
-        appendMenuItem = NSMenuItem(title: "동작 추가", action: nil, keyEquivalent: "")
+        appendMenuItem = NSMenuItem(title: L("Add Action"), action: nil, keyEquivalent: "")
         appendMenuItem.submenu = makeActionTypeMenu(insertOffset: 0)
         menu.addItem(appendMenuItem)
 
@@ -710,23 +799,23 @@ class ViewController: NSViewController {
     private func makeActionTypeMenu(insertOffset: Int) -> NSMenu {
         let m = NSMenu()
         let types: [(String, AutoAction.ActionType)] = [
-            ("🖱  클릭", .click),
-            ("⬇  스크롤", .scroll),
-            ("✋  드래그", .drag),
-            ("⌨︎  키 입력", .key),
+            (L("🖱  Click"), .click),
+            (L("⬇  Scroll"), .scroll),
+            (L("✋  Drag"), .drag),
+            (L("⌨︎  Key"), .key),
             // 통합 대기 — 디테일 패널에서 시간/클릭/엔터 중 선택. 신규 생성
             // 시 기본값은 시간 대기.
-            ("⏱  대기", .wait(type: .time)),
-            ("🔍  OCR", .ocr),
-            ("📝  스크립트", .script(code: "")),
+            (L("⏱  Wait"), .wait(type: .time)),
+            (L("🔍  OCR"), .ocr),
+            (L("📝  Script"), .script(code: "")),
             // Hidden from the picker until needed again — `.setURL` /
             // `.openChrome` are Chrome-specific and superseded by `.openBrowser`.
             // Runtime / detail UI / persistence for these types stays intact
             // so old scenarios still load and run.
             // ("🌐  URL", .setURL(url: "")),
             // ("🆕  새창", .openChrome(url: "")),
-            ("🌐🪟  브라우저", .openBrowser(url: "")),
-            ("🪟  창프레임", .windowFrame),
+            (L("🌐🪟  Browser"), .openBrowser(url: "")),
+            (L("🪟  Window Frame"), .windowFrame),
         ]
         for (label, type) in types {
             let item = NSMenuItem(title: label,
@@ -948,7 +1037,7 @@ class ViewController: NSViewController {
             guard let self = self else { return }
             try? await self.runner.run(try! self.actions.value())
             self.isRunning.onNext(false)
-            self.statusLabel.stringValue = "✓ 완료"
+            self.statusLabel.stringValue = L("✓ Done")
         }
     }
 

@@ -33,17 +33,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            // SF Symbol — calendar with a clock badge fits the
-            // scheduled-reservation use case.
-            button.image = NSImage(systemSymbolName: "calendar.badge.clock",
-                                   accessibilityDescription: "AIMacro")
-            button.image?.isTemplate = true
+            // SF Symbol that mirrors the app icon's design — a cursor with
+            // radial "click" rays. Falls back through progressively simpler
+            // cursor symbols so we never end up with a blank status item.
+            let symbolNames = ["cursorarrow.rays",
+                               "cursorarrow.click.2",
+                               "cursorarrow.click",
+                               "cursorarrow"]
+            for name in symbolNames {
+                if let img = NSImage(systemSymbolName: name,
+                                     accessibilityDescription: "Macroony") {
+                    img.isTemplate = true
+                    button.image = img
+                    break
+                }
+            }
             button.target = self
             button.action = #selector(statusItemClicked(_:))
             // Receive both click types so we can branch left → toggle window,
             // right (or ctrl-click) → show context menu.
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-            button.toolTip = "AIMacro"
+            button.toolTip = "Macroony"
         }
     }
 
@@ -123,7 +133,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func wirePreferencesMenu() {
-        guard let menu = NSApp.mainMenu?.item(withTitle: "AIMacro")?.submenu,
+        // App menu title is "Macroony" after the rebrand (see Main.storyboard).
+        // Lookup-by-title still works at the storyboard level even though the
+        // Swift module / target name stays "AIMacro".
+        guard let menu = NSApp.mainMenu?.item(withTitle: "Macroony")?.submenu,
               let prefsItem = menu.item(withTitle: "Preferences…") else { return }
         prefsItem.action = #selector(openPreferences(_:))
         prefsItem.target = self
