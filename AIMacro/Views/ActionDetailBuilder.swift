@@ -182,8 +182,27 @@ final class ActionDetailBuilder {
             cards.append(card)
 
         case .scroll:
-            let card = makeCard(title: "입력 옵션")
+            let card = makeCard(title: "스크롤")
+            card.addRow(label: "방향",
+                        control: makeScrollDirectionControl(action, disposeBag: disposeBag),
+                        hint: "마우스 휠 / 매직 마우스 스위프 시뮬레이션")
+            card.addRow(label: "반복",
+                        control: makeCountField(action, disposeBag: disposeBag, suffix: "틱"),
+                        hint: "1틱 ≈ 휠 한 칸 (3줄)")
+            card.addRow(label: "녹화",
+                        control: makeScrollRecorderButton(action, disposeBag: disposeBag),
+                        hint: "버튼을 누른 뒤 실제로 스크롤하면 방향·틱 수가 자동 입력")
+            cards.append(card)
+
+        case .drag:
+            let card = makeCard(title: "드래그")
+            card.addRow(label: "경로",
+                        control: makeDragRecorder(action, disposeBag: disposeBag),
+                        hint: "녹화 버튼을 누른 뒤 실제로 마우스를 드래그하세요")
             card.addRow(label: "반복", control: makeCountField(action, disposeBag: disposeBag, suffix: "회"))
+            card.addRow(label: "미리보기",
+                        control: makeActionSnapshotView(action, disposeBag: disposeBag),
+                        hint: "드래그 시작 위치에서 캡처된 영역")
             cards.append(card)
 
         case .key:
@@ -196,17 +215,8 @@ final class ActionDetailBuilder {
             card.addRow(label: "반복", control: makeCountField(action, disposeBag: disposeBag, suffix: "회"))
             cards.append(card)
 
-        case .wait(.click), .wait(.enter):
-            let card = makeCard(title: "대기")
-            card.addRow(label: "타입", control: NSTextField(labelWithString: waitDescription(action.type)))
-            cards.append(card)
-
-        case .wait(.time):
-            let card = makeCard(title: "시간 대기")
-            card.addRow(label: "목표 시각",
-                        control: makeWaitTimeControl(action, disposeBag: disposeBag),
-                        hint: "지정한 시각이 되면 다음 단계로 진행")
-            cards.append(card)
+        case .wait:
+            cards.append(makeWaitCard(action, disposeBag: disposeBag))
 
         case .ocr:
             let card = makeCard(title: "OCR 검색")
@@ -293,6 +303,7 @@ final class ActionDetailBuilder {
         switch type {
         case .wait(.click): return "사용자가 마우스 클릭할 때까지 일시정지"
         case .wait(.enter): return "사용자가 엔터 키를 누를 때까지 일시정지"
+        case .wait(.time):  return "지정한 시각이 되면 다음 단계로 진행"
         default:            return ""
         }
     }
@@ -337,6 +348,18 @@ final class ActionDetailBuilder {
         field.delegate = TextFieldChangeDelegate.attach(to: field) { [weak action] new in
             action?.count.onNext(Int(new) ?? 1)
         }
+        // Reflect programmatic count updates (e.g. scroll recorder auto-fill)
+        // back into the field — but skip while the user is editing so we
+        // don't yank characters out from under them mid-type.
+        action.count
+            .observe(on: MainScheduler.instance)
+            .subscribe(onNext: { [weak field] new in
+                guard let field = field, field.currentEditor() == nil else { return }
+                let s = "\(new)"
+                if field.stringValue != s { field.stringValue = s }
+            })
+            .disposed(by: disposeBag)
+
         let unit = NSTextField(labelWithString: suffix)
         unit.font = .systemFont(ofSize: 11)
         unit.textColor = .tertiaryLabelColor
@@ -347,6 +370,115 @@ final class ActionDetailBuilder {
         row.spacing = 6
         return row
     }
+
+    /// 4-up direction selector for `.scroll` actions (↓ ↑ ← →). Persists
+    /// the choice in `action.text` via `setScrollDirection`. Subscribes to
+    /// `action.text` so a programmatic update (e.g. scroll recorder) flips
+    /// the selected segment in place.
+    private func makeScrollDirectionControl(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
+        let segmented = NSSegmentedControl(labels: ["↓", "↑", "←", "→"],
+                                           trackingMode: .selectOne,
+                                           target: nil,
+                                           action: nil)
+        let directions: [ScrollDirection] = [.down, .up, .left, .right]
+        segmented.selectedSegment = directions.firstIndex(of: action.scrollDirection) ?? 0
+        segmented.translatesAutoresizingMaskIntoConstraints = false
+        segmented.widthAnchor.constraint(equalToConstant: 180).isActive = true
+
+        let bridge = ScrollDirectionBridge(action: action, directions: directions)
+        segmented.target = bridge
+        segmented.action = #selector(ScrollDirectionBridge.changed(_:))
+        objc_setAssociatedObject(segmented, &Self.scrollDirectionBridgeAssocKey,
+                                 bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        action.text
+            .observe(on: MainScheduler.instance)
+            .subscribe(onNext: { [weak segmented, weak action] _ in
+                guard let segmented = segmented, let action = action else { return }
+                let idx = directions.firstIndex(of: action.scrollDirection) ?? 0
+                if segmented.selectedSegment != idx {
+                    segmented.selectedSegment = idx
+                }
+            })
+            .disposed(by: disposeBag)
+        return segmented
+    }
+
+    private static var scrollDirectionBridgeAssocKey: UInt8 = 0
+
+    /// "🎯 스크롤 녹화" button — taps the system scroll event stream,
+    /// accumulates deltas until the user pauses, then auto-fills direction
+    /// and tick count on the action.
+    private func makeScrollRecorderButton(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
+        let button = NSButton(title: "🎯 스크롤 녹화",
+                              target: self,
+                              action: #selector(recordScroll(_:)))
+        button.bezelStyle = .roundRect
+        button.controlSize = .small
+        button.toolTip = "버튼을 누르고 마우스 휠 / 매직 마우스 / 트랙패드로 원하는 만큼 스크롤하세요. 0.6 초 이상 멈추면 자동 종료됩니다."
+        objc_setAssociatedObject(button, &Self.actionAssocKey,
+                                 action, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        return button
+    }
+
+    @objc private func recordScroll(_ sender: NSButton) {
+        guard let action = objc_getAssociatedObject(sender, &Self.actionAssocKey)
+                as? AutoAction else { return }
+        // Drop any prior recorder still anchored to the button.
+        objc_setAssociatedObject(sender, &Self.scrollRecorderAssocKey,
+                                 nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        Self.armPickerVisuals(button: sender, display: nil, active: true, pushCursor: false)
+        ScanPreviewPanel.shared.show(rectSize: CGSize(width: 40, height: 40))
+
+        let recorder = ScrollWheelRecorder()
+        // Anchor so the CGEventTap's unretained pointer stays valid past
+        // this stack frame — same pattern as `MouseDragRecorder`.
+        objc_setAssociatedObject(sender, &Self.scrollRecorderAssocKey,
+                                 recorder, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        recorder.onEnd = { [weak action, weak sender] dy, dx in
+            // Pick the dominant axis. Sign convention matches the playback
+            // helper: negative wheel1 = `.down`, positive = `.up`; negative
+            // wheel2 = `.right`, positive = `.left`.
+            let absY = abs(dy)
+            let absX = abs(dx)
+            let direction: ScrollDirection
+            let magnitude: CGFloat
+            if absY == 0 && absX == 0 {
+                // No scroll captured — leave the existing config alone.
+                AppLogger.shared.log("🌀 스크롤 녹화: 입력 없음")
+                if let sender = sender {
+                    Self.armPickerVisuals(button: sender, display: nil, active: false, pushCursor: false)
+                    objc_setAssociatedObject(sender, &Self.scrollRecorderAssocKey,
+                                             nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+                }
+                DispatchQueue.main.async { ScanPreviewPanel.shared.hide() }
+                return
+            }
+            if absY >= absX {
+                direction = dy < 0 ? .down : .up
+                magnitude = absY
+            } else {
+                direction = dx < 0 ? .right : .left
+                magnitude = absX
+            }
+            let ticks = max(1, Int(ceil(magnitude / 3)))
+            action?.setScrollDirection(direction)
+            action?.count.onNext(ticks)
+
+            if let sender = sender {
+                Self.armPickerVisuals(button: sender, display: nil, active: false, pushCursor: false)
+                objc_setAssociatedObject(sender, &Self.scrollRecorderAssocKey,
+                                         nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            }
+            DispatchQueue.main.async { ScanPreviewPanel.shared.hide() }
+            AppLogger.shared.log("🌀 스크롤 녹화: \(direction.rawValue) \(ticks)틱")
+        }
+        recorder.start()
+    }
+
+    private static var scrollRecorderAssocKey: UInt8 = 0
 
     /// 좌/우 mouse button selector for `.click` actions. Persists the choice
     /// in `action.text` via `setClickButton`.
@@ -589,6 +721,71 @@ final class ActionDetailBuilder {
         }
         return field
     }
+
+    /// Unified wait card — single popup at the top picks between the three
+    /// wait modes (time / click / enter) and the row below reactively swaps
+    /// to whichever editor that mode needs (or a hint label when the mode
+    /// has no extra config). Default mode is `.time`, which is what the
+    /// picker menu seeds for new wait actions.
+    private func makeWaitCard(_ action: AutoAction, disposeBag: DisposeBag) -> CardView {
+        let card = makeCard(title: "대기")
+
+        // Ordered list of all sub-types — segment / popup index → enum.
+        let waitTypes: [AutoAction.WaitType] = [.time, .click, .enter]
+        let labels = ["시간 대기", "클릭 대기", "엔터 대기"]
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.addItems(withTitles: labels)
+        let currentWait: AutoAction.WaitType
+        if case .wait(let wt) = action.type { currentWait = wt } else { currentWait = .time }
+        popup.selectItem(at: waitTypes.firstIndex(of: currentWait) ?? 0)
+        popup.translatesAutoresizingMaskIntoConstraints = false
+
+        // Container that holds the option view for the currently-selected
+        // wait type. Rebuilt in `rebuildOption` whenever the popup changes.
+        let optionContainer = NSView()
+        optionContainer.translatesAutoresizingMaskIntoConstraints = false
+
+        let rebuildOption: () -> Void = { [weak self, weak action, weak optionContainer] in
+            guard let self = self,
+                  let action = action,
+                  let container = optionContainer else { return }
+            for v in container.subviews { v.removeFromSuperview() }
+
+            let inner: NSView
+            switch action.type {
+            case .wait(.time):
+                inner = self.makeWaitTimeControl(action, disposeBag: disposeBag)
+            default:
+                let label = NSTextField(labelWithString: self.waitDescription(action.type))
+                label.textColor = .secondaryLabelColor
+                inner = label
+            }
+            inner.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(inner)
+            NSLayoutConstraint.activate([
+                inner.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                inner.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                inner.topAnchor.constraint(equalTo: container.topAnchor),
+                inner.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            ])
+        }
+        rebuildOption()
+
+        let bridge = WaitTypeBridge(action: action,
+                                    waitTypes: waitTypes,
+                                    onChange: rebuildOption)
+        popup.target = bridge
+        popup.action = #selector(WaitTypeBridge.changed(_:))
+        objc_setAssociatedObject(popup, &Self.waitTypeBridgeAssocKey,
+                                 bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        card.addRow(label: "타입", control: popup,
+                    hint: "기본값은 시간 대기")
+        card.addRow(label: "옵션", control: optionContainer)
+        return card
+    }
+
+    private static var waitTypeBridgeAssocKey: UInt8 = 0
 
     /// Wait-time picker — reuses `DateTimePickerControl` so the user gets the
     /// same calendar+clock+text popover as the Start time picker. Reads/writes
@@ -864,6 +1061,212 @@ final class ActionDetailBuilder {
         row.spacing = 8
         display.setContentHuggingPriority(.defaultLow, for: .horizontal)
         return row
+    }
+
+    /// Drag recorder UI: live summary of the recorded path + a single
+    /// "🎯 드래그 녹화" button. Pressing the button starts a `MouseDragRecorder`
+    /// that captures the user's real mouseDown → drag → mouseUp gesture
+    /// system-wide and stores it as `action.point` (start) + the
+    /// distance-sampled waypoint list in `action.text` (intermediate points
+    /// + final release point).
+    private func makeDragRecorder(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
+        let summary = NSTextField(labelWithString: "")
+        summary.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        summary.wantsLayer = true
+        summary.layer?.borderWidth = 1
+        summary.layer?.borderColor = NSColor.separatorColor.cgColor
+        summary.layer?.cornerRadius = 6
+        summary.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
+        summary.cell?.lineBreakMode = .byTruncatingTail
+        summary.translatesAutoresizingMaskIntoConstraints = false
+        summary.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        summary.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let refresh: () -> Void = { [weak action] in
+            guard let action = action else { return }
+            let start = (try? action.point.value()) ?? .zero
+            let waypoints = action.dragWaypoints
+            if start == .zero && waypoints.isEmpty {
+                summary.stringValue = "  (녹화되지 않음)"
+                return
+            }
+            let endStr: String
+            if let end = waypoints.last {
+                endStr = "(\(Int(end.x)), \(Int(end.y)))"
+            } else {
+                endStr = "(없음)"
+            }
+            let inner = max(0, waypoints.count - 1)
+            summary.stringValue = "  시작 (\(Int(start.x)), \(Int(start.y)))  →  경로점 \(inner)개  →  끝 \(endStr)"
+        }
+        // The point and text subjects together fully describe the path —
+        // rebuild whenever either changes.
+        action.point
+            .observe(on: MainScheduler.instance)
+            .subscribe(onNext: { _ in refresh() })
+            .disposed(by: disposeBag)
+        action.text
+            .observe(on: MainScheduler.instance)
+            .subscribe(onNext: { _ in refresh() })
+            .disposed(by: disposeBag)
+
+        let recordButton = NSButton(title: "🎯 드래그 녹화",
+                                    target: self,
+                                    action: #selector(recordDrag(_:)))
+        recordButton.bezelStyle = .roundRect
+        recordButton.controlSize = .small
+        recordButton.toolTip = "버튼을 누른 뒤 실제로 마우스를 드래그하세요. 클릭→드래그→떼기 한 번이 그대로 기록됩니다."
+        objc_setAssociatedObject(recordButton, &Self.actionAssocKey,
+                                 action, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        let row = NSStackView(views: [summary, recordButton])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+        return row
+    }
+
+    @objc private func recordDrag(_ sender: NSButton) {
+        guard let action = objc_getAssociatedObject(sender, &Self.actionAssocKey)
+                as? AutoAction else { return }
+        // If a previous recorder is somehow still attached (re-click before
+        // onEnd cleared it), drop it now — its deinit will tear down the
+        // tap before we install a fresh one.
+        objc_setAssociatedObject(sender, &Self.dragRecorderAssocKey,
+                                 nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        Self.armPickerVisuals(button: sender, display: nil, active: true, pushCursor: false)
+        ScanPreviewPanel.shared.show(rectSize: CGSize(width: 40, height: 40))
+
+        var samples: [CGPoint] = []
+        var startPoint: CGPoint = .zero
+        let recorder = MouseDragRecorder()
+        // Anchor the recorder to the button so it survives past this
+        // function's stack frame — the CGEventTap callback uses an
+        // unretained pointer, so without this strong reference the first
+        // mouseDown after `recordDrag` returns would access a freed object
+        // (EXC_BAD_ACCESS).
+        objc_setAssociatedObject(sender, &Self.dragRecorderAssocKey,
+                                 recorder, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        recorder.onStart = { [weak action] point in
+            startPoint = point
+            action?.point.onNext(point)
+            samples.removeAll()
+            AppLogger.shared.log("✋ 드래그 녹화 시작: (\(Int(point.x)), \(Int(point.y)))")
+        }
+        recorder.onSample = { point in
+            samples.append(point)
+        }
+        recorder.onEnd = { [weak action, weak sender] point in
+            samples.append(point)
+            action?.setDragWaypoints(samples)
+            // One-shot screenshot of the area covering start + waypoints,
+            // overlaid with start/end markers. Replaces the start-point-only
+            // live capture so long drags show both endpoints in context.
+            if let id = action?.id,
+               let img = ActionDetailBuilder.makeDragSnapshot(start: startPoint,
+                                                              waypoints: samples) {
+                OCRSnapshotStore.shared.save(img, actionId: id)
+            }
+            if let sender = sender {
+                Self.armPickerVisuals(button: sender, display: nil, active: false, pushCursor: false)
+                // Release the recorder anchor so the tap is torn down by
+                // its deinit and we don't leak the run-loop source.
+                objc_setAssociatedObject(sender, &Self.dragRecorderAssocKey,
+                                         nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            }
+            DispatchQueue.main.async { ScanPreviewPanel.shared.hide() }
+            AppLogger.shared.log("✋ 드래그 녹화 완료: 경로점 \(samples.count)개 (끝 \(Int(point.x)), \(Int(point.y)))")
+        }
+        recorder.start()
+    }
+
+    private static var dragRecorderAssocKey: UInt8 = 0
+
+    /// Take a one-shot screenshot of the smallest rect that contains the
+    /// drag's start and every waypoint (with padding + minimum size), then
+    /// overlay a green start marker, a red end marker, and a yellow polyline
+    /// connecting the path. Coords throughout are global Quartz (Y-down,
+    /// origin top-left of the primary display) — same as what the recorder
+    /// captures from CGEventTap.
+    static func makeDragSnapshot(start: CGPoint, waypoints: [CGPoint]) -> NSImage? {
+        let allPoints = [start] + waypoints
+        guard let minX = allPoints.map(\.x).min(),
+              let maxX = allPoints.map(\.x).max(),
+              let minY = allPoints.map(\.y).min(),
+              let maxY = allPoints.map(\.y).max() else { return nil }
+
+        let padding: CGFloat = 60
+        let minSize: CGFloat = 200
+        let w = max(minSize, maxX - minX + padding * 2)
+        let h = max(minSize, maxY - minY + padding * 2)
+        let cx = (minX + maxX) / 2
+        let cy = (minY + maxY) / 2
+        let captureRect = CGRect(x: cx - w / 2, y: cy - h / 2, width: w, height: h)
+
+        // CGWindowListCreateImage is deprecated in macOS 14 but still
+        // functional and matches the app's macOS 12 deployment target. It
+        // returns nil if Screen Recording permission isn't granted — caller
+        // silently skips saving the snapshot in that case.
+        guard let cg = CGWindowListCreateImage(captureRect,
+                                               .optionOnScreenOnly,
+                                               kCGNullWindowID,
+                                               .nominalResolution) else {
+            return nil
+        }
+
+        let imageSize = NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height))
+        let base = NSImage(cgImage: cg, size: imageSize)
+
+        // Quartz (Y-down) → image-local (Y-up). The drawing context inside
+        // lockFocus is Y-up by default.
+        func toImage(_ p: CGPoint) -> CGPoint {
+            CGPoint(x: p.x - captureRect.minX,
+                    y: imageSize.height - (p.y - captureRect.minY))
+        }
+
+        let composite = NSImage(size: imageSize)
+        composite.lockFocus()
+        defer { composite.unlockFocus() }
+
+        base.draw(in: CGRect(origin: .zero, size: imageSize))
+
+        // Path polyline (yellow translucent stroke).
+        if !waypoints.isEmpty {
+            let path = NSBezierPath()
+            path.move(to: toImage(start))
+            for wp in waypoints {
+                path.line(to: toImage(wp))
+            }
+            NSColor.systemYellow.withAlphaComponent(0.9).setStroke()
+            path.lineWidth = 3
+            path.stroke()
+        }
+
+        // Start marker (green dot + white outline).
+        drawMarker(at: toImage(start), color: .systemGreen)
+
+        // End marker (red dot + white outline) — last waypoint only.
+        if let endPt = waypoints.last {
+            drawMarker(at: toImage(endPt), color: .systemRed)
+        }
+
+        return composite
+    }
+
+    /// Filled circle with a white outline ring — used by `makeDragSnapshot`
+    /// to mark the drag endpoints. Caller is responsible for being inside
+    /// an active `lockFocus()` context.
+    private static func drawMarker(at point: CGPoint, color: NSColor) {
+        let r: CGFloat = 10
+        let rect = CGRect(x: point.x - r, y: point.y - r, width: r * 2, height: r * 2)
+        color.setFill()
+        NSBezierPath(ovalIn: rect).fill()
+        NSColor.white.setStroke()
+        let outline = NSBezierPath(ovalIn: rect)
+        outline.lineWidth = 2
+        outline.stroke()
     }
 
     private func makeWindowFrameRow(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
@@ -1260,6 +1663,7 @@ enum ActionIcons {
         switch type {
         case .click:        names = ["cursorarrow.click.2", "cursorarrow.click", "cursorarrow"]
         case .scroll:       names = ["arrow.down.circle", "arrow.down"]
+        case .drag:         names = ["hand.draw", "arrow.up.and.down.and.arrow.left.and.right", "arrow.right"]
         case .key:          names = ["keyboard", "command"]
         case .wait(.click): names = ["hand.tap", "hand.tap.fill", "hourglass"]
         case .wait(.enter): names = ["hourglass.bottomhalf.filled", "hourglass"]
@@ -1286,6 +1690,7 @@ enum ActionIcons {
         switch type {
         case .click:                return "🖱"
         case .scroll:               return "⬇"
+        case .drag:                 return "✋"
         case .key:                  return "⌨︎"
         case .wait(.click):         return "⏳"
         case .wait(.enter):         return "⏎⏳"
@@ -1303,6 +1708,7 @@ enum ActionIcons {
         switch type {
         case .click:                return "클릭"
         case .scroll:               return "스크롤"
+        case .drag:                 return "드래그"
         case .key:                  return "키 입력"
         case .wait(.click):         return "클릭 대기"
         case .wait(.enter):         return "엔터 대기"
@@ -1628,6 +2034,48 @@ private final class PickerCaptureSession {
         let key = NSDeviceDescriptionKey("NSScreenNumber")
         return NSScreen.screens.first { $0.frame.contains(point) }?
             .deviceDescription[key] as? CGDirectDisplayID
+    }
+}
+
+/// Popup bridge for the unified `.wait` card. Maps the selected popup
+/// index back to a `WaitType`, mutates `action.type`, and notifies the
+/// caller so the option row can swap in the new sub-editor.
+private final class WaitTypeBridge: NSObject {
+    private weak var action: AutoAction?
+    private let waitTypes: [AutoAction.WaitType]
+    private let onChange: () -> Void
+
+    init(action: AutoAction,
+         waitTypes: [AutoAction.WaitType],
+         onChange: @escaping () -> Void) {
+        self.action = action
+        self.waitTypes = waitTypes
+        self.onChange = onChange
+    }
+
+    @objc func changed(_ sender: NSPopUpButton) {
+        let idx = sender.indexOfSelectedItem
+        guard waitTypes.indices.contains(idx), let action = action else { return }
+        action.type = .wait(type: waitTypes[idx])
+        onChange()
+    }
+}
+
+/// `target/action` shim for the `.scroll` direction segmented control.
+/// Holds the segment-index → ScrollDirection mapping so the segmented
+/// control can be reordered without rewiring the runtime semantics.
+private final class ScrollDirectionBridge: NSObject {
+    private weak var action: AutoAction?
+    private let directions: [ScrollDirection]
+
+    init(action: AutoAction, directions: [ScrollDirection]) {
+        self.action = action
+        self.directions = directions
+    }
+
+    @objc func changed(_ sender: NSSegmentedControl) {
+        guard directions.indices.contains(sender.selectedSegment) else { return }
+        action?.setScrollDirection(directions[sender.selectedSegment])
     }
 }
 

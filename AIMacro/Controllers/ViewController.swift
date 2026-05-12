@@ -712,10 +712,11 @@ class ViewController: NSViewController {
         let types: [(String, AutoAction.ActionType)] = [
             ("🖱  클릭", .click),
             ("⬇  스크롤", .scroll),
+            ("✋  드래그", .drag),
             ("⌨︎  키 입력", .key),
-            ("⏳  클릭대기", .wait(type: .click)),
-            ("⏎⏳  엔터대기", .wait(type: .enter)),
-            ("⏱  시간대기", .wait(type: .time)),
+            // 통합 대기 — 디테일 패널에서 시간/클릭/엔터 중 선택. 신규 생성
+            // 시 기본값은 시간 대기.
+            ("⏱  대기", .wait(type: .time)),
             ("🔍  OCR", .ocr),
             ("📝  스크립트", .script(code: "")),
             // Hidden from the picker until needed again — `.setURL` /
@@ -842,6 +843,7 @@ class ViewController: NSViewController {
         switch type {
         case .click:                  name = "클릭"
         case .scroll:                 name = "스크롤"
+        case .drag:                   name = "드래그"
         case .key:                    name = "키 입력"; text = ":enter"
         case .wait(let wt):
             switch wt {

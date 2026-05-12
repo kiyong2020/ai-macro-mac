@@ -34,6 +34,9 @@ class AutoAction {
         /// 그대로 적용. action.text 는 "<url>|<frame>" 파이프 구분 포맷
         /// (`OpenBrowserPayload`).
         case openBrowser(url: String)
+        /// 드래그: action.point 에서 마우스 down → action.text 의 경로점들
+        /// ("x1,y1;x2,y2;...") 을 차례로 부드럽게 이동 → 마지막 점에서 up.
+        case drag
         case windowFrame /// 활성 윈도우 프레임을 저장된 사각형으로 맞춤
     }
 
@@ -207,6 +210,7 @@ extension AutoAction {
         case .setURL(let url):        return ["kind": "setURL", "url": url]
         case .openChrome(let url):    return ["kind": "openChrome", "url": url]
         case .openBrowser(let url):   return ["kind": "openBrowser", "url": url]
+        case .drag:                   return ["kind": "drag"]
         case .windowFrame:            return ["kind": "windowFrame"]
         }
     }
@@ -226,6 +230,7 @@ extension AutoAction {
         case "setURL":      return .setURL(url: dict["url"] as? String ?? "")
         case "openChrome":  return .openChrome(url: dict["url"] as? String ?? "")
         case "openBrowser": return .openBrowser(url: dict["url"] as? String ?? "")
+        case "drag":        return .drag
         case "windowFrame": return .windowFrame
         default:            return nil
         }
@@ -398,5 +403,45 @@ extension AutoAction {
             cfg.modifiers.remove(flag)
         }
         setClickConfig(cfg)
+    }
+}
+
+// MARK: - .scroll direction
+
+extension AutoAction {
+    /// Direction for `.scroll` actions, decoded from `action.text`.
+    /// Defaults to `.down` for legacy rows where `text` is empty.
+    var scrollDirection: ScrollDirection {
+        ScrollDirection.parse((try? text.value()) ?? "")
+    }
+
+    func setScrollDirection(_ direction: ScrollDirection) {
+        text.onNext(direction.rawValue)
+    }
+}
+
+// MARK: - .drag waypoints
+
+extension AutoAction {
+    /// Waypoints traversed during a drag, decoded from `action.text`
+    /// (`"x1,y1;x2,y2;…"`). The drag starts at `action.point`, animates
+    /// through every waypoint in order, and releases at the last one.
+    /// Empty list means "no movement" — the runner still presses + releases
+    /// at the start point, behaving as a long-press.
+    var dragWaypoints: [CGPoint] {
+        let raw = (try? text.value()) ?? ""
+        guard !raw.isEmpty else { return [] }
+        return raw.split(separator: ";").compactMap { s -> CGPoint? in
+            let parts = s.split(separator: ",")
+            guard parts.count == 2,
+                  let x = Double(parts[0]), let y = Double(parts[1]) else { return nil }
+            return CGPoint(x: x, y: y)
+        }
+    }
+
+    func setDragWaypoints(_ points: [CGPoint]) {
+        let encoded = points.map { "\(Int($0.x)),\(Int($0.y))" }
+            .joined(separator: ";")
+        text.onNext(encoded)
     }
 }

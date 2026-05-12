@@ -39,7 +39,13 @@ final class DateTimePickerControl: NSButton {
     }
 
     private func commonInit() {
-        bezelStyle = .rounded
+        // `.roundRect` renders a clear thin outline in both light and dark
+        // mode at small control sizes — the original `.rounded` style was
+        // nearly invisible in the toolbar against the dark window chrome.
+        // Force isBordered explicitly in case the storyboard's `type="bevel"`
+        // cell attribute would otherwise suppress the border.
+        isBordered = true
+        bezelStyle = .roundRect
         target = self
         action = #selector(showPopover)
         updateTitle()

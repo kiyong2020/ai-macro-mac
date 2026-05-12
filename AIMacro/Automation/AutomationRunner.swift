@@ -57,6 +57,12 @@ final class AutomationRunner {
     /// Run the full action list sequentially. Per-action errors are surfaced via
     /// `lastError` but don't abort the sequence — matches the previous behaviour.
     func run(_ actions: [AutoAction]) async throws {
+        // Gate the bottom on-screen log to this run only. defer ensures the
+        // session ends on early return / cancellation / thrown error so idle
+        // logs stay console-only.
+        AppLogger.shared.startSession()
+        defer { AppLogger.shared.endSession() }
+
         // Broadcast first so any listener (KeyUtil cache, etc.) can wipe stale
         // per-run state before the first action fires.
         NotificationCenter.default.post(name: .actionSequenceWillStart, object: self)
@@ -105,6 +111,7 @@ final class AutomationRunner {
         case .setURL(let url):         setChromeURL(effectiveURL(action, default: url))
         case .openChrome(let url):     openNewChromeWindow(effectiveURL(action, default: url))
         case .openBrowser(let url):    try await runOpenBrowser(action, default: url)
+        case .drag:                    try await runDrag(action)
         case .windowFrame:             try await runWindowFrame(action)
         }
     }
@@ -126,10 +133,23 @@ final class AutomationRunner {
         }
     }
 
+    private func runDrag(_ action: AutoAction) async throws {
+        let count = try! action.count.value()
+        let start = try! action.point.value()
+        let waypoints = action.dragWaypoints
+        for i in 0 ..< count {
+            await dragMove(start: start, waypoints: waypoints)
+            if i < count - 1 {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+    }
+
     private func runScroll(_ action: AutoAction) async throws {
         let count = try! action.count.value()
+        let direction = action.scrollDirection
         for i in 0 ..< count {
-            scrollDown()
+            scrollWheel(direction: direction)
             if i < count - 1 {
                 try await Task.sleep(for: .milliseconds(100))
             }

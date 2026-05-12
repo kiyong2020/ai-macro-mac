@@ -79,6 +79,33 @@ private func performClick(at point: CGPoint,
     }
 }
 
+/// Synthesises a left-button drag: cursor moves to `start`, button down,
+/// smooth `.leftMouseDragged` events through each waypoint in order, then
+/// button up at the last waypoint (or at `start` if `waypoints` is empty,
+/// which makes the drag behave as a long-press).
+func dragMove(start: CGPoint, waypoints: [CGPoint]) async {
+    await simulateMouseMove(to: start)
+    let source = CGEventSource(stateID: .hidSystemState)
+
+    let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown,
+                       mouseCursorPosition: start, mouseButton: .left)
+    down?.setIntegerValueField(.mouseEventClickState, value: 1)
+    down?.post(tap: .cghidEventTap)
+    // Brief pause so the down event registers as a press-and-hold before
+    // the drag stream begins (some apps need a few ms to enter drag mode).
+    try? await Task.sleep(for: .milliseconds(30))
+
+    for wp in waypoints {
+        await simulateMouseDrag(to: wp)
+    }
+
+    let endPos = waypoints.last ?? start
+    let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp,
+                     mouseCursorPosition: endPos, mouseButton: .left)
+    up?.setIntegerValueField(.mouseEventClickState, value: 1)
+    up?.post(tap: .cghidEventTap)
+}
+
 /// Virtual key codes for the modifier keys present in `m`. Order is fixed
 /// so press / release happens deterministically.
 private func modifierKeyCodes(for m: NSEvent.ModifierFlags) -> [CGKeyCode] {
@@ -122,6 +149,20 @@ func setupGlobalObservers() {
 /// Moves the cursor from its last simulated position to `target` along a slightly curved
 /// path with randomized step timing, mimicking natural human mouse movement.
 private func simulateMouseMove(to target: CGPoint) async {
+    await simulateMousePath(to: target, eventType: .mouseMoved)
+}
+
+/// Drag-time companion to `simulateMouseMove`. Emits `.leftMouseDragged`
+/// events along the same smoothed Bezier path so apps that distinguish a
+/// real drag from a series of moves (Finder file drag, Chrome tab drag)
+/// receive the right event stream.
+private func simulateMouseDrag(to target: CGPoint) async {
+    await simulateMousePath(to: target, eventType: .leftMouseDragged)
+}
+
+/// Internal — shared interpolation used by both move and drag. Updates
+/// `lastSimulatedPosition` on completion regardless of event type.
+private func simulateMousePath(to target: CGPoint, eventType: CGEventType) async {
     let start: CGPoint
     if let last = lastSimulatedPosition {
         start = last
@@ -157,7 +198,7 @@ private func simulateMouseMove(to target: CGPoint) async {
         let jy = i < steps ? CGFloat.random(in: -2...2) : 0
 
         let pos = CGPoint(x: x + jx, y: y + jy)
-        CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: pos, mouseButton: .left)?
+        CGEvent(mouseEventSource: nil, mouseType: eventType, mouseCursorPosition: pos, mouseButton: .left)?
             .post(tap: .cghidEventTap)
 
         // Slow down as the cursor closes on the target. Inter-step delay
@@ -175,8 +216,39 @@ private func simulateMouseMove(to target: CGPoint) async {
 }
 
 
-func scrollDown() {
-    sendKeyPress(key: 49)    // 스페이스로 아래로 스크롤
+/// Direction of a synthetic scroll-wheel tick. Same event stream the
+/// physical mouse wheel, Magic Mouse top swipe, and trackpad two-finger
+/// scroll all share at the system level (`CGEventType.scrollWheel`).
+enum ScrollDirection: String {
+    case down, up, left, right
+
+    static func parse(_ raw: String) -> ScrollDirection {
+        ScrollDirection(rawValue: raw.lowercased()) ?? .down
+    }
+}
+
+/// Post a single scroll-wheel "tick" in the given direction. `lines` controls
+/// how aggressive each tick is — 3 matches a typical physical wheel click,
+/// higher values feel more like a Magic Mouse / trackpad sweep. Sign of the
+/// delta is set so the user's mental model matches the label (e.g. `.down`
+/// scrolls content downward, surfacing what was below the viewport).
+func scrollWheel(direction: ScrollDirection, lines: Int32 = 3) {
+    let source = CGEventSource(stateID: .hidSystemState)
+    let vertical: Int32
+    let horizontal: Int32
+    switch direction {
+    case .down:  vertical = -lines; horizontal = 0
+    case .up:    vertical =  lines; horizontal = 0
+    case .right: vertical = 0;      horizontal = -lines
+    case .left:  vertical = 0;      horizontal =  lines
+    }
+    guard let event = CGEvent(scrollWheelEvent2Source: source,
+                              units: .line,
+                              wheelCount: 2,
+                              wheel1: vertical,
+                              wheel2: horizontal,
+                              wheel3: 0) else { return }
+    event.post(tap: .cghidEventTap)
 }
 
 func enterKey() {
