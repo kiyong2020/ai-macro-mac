@@ -218,11 +218,16 @@ final class AutomationRunner {
 
     private func runScroll(_ action: AutoAction) async throws {
         let count = try! action.count.value()
-        let direction = action.scrollDirection
+        let cfg = action.scrollConfig
+        // "느린 간격" widens the gap between ticks so flick-detecting
+        // receivers (Android Emulator's Qt views, etc.) don't synthesise
+        // momentum scrolling on top of our discrete ticks. Default is the
+        // legacy 100 ms — only opt-in users pay the latency.
+        let interTickMs = cfg.slow ? 300 : 100
         for i in 0 ..< count {
-            scrollWheel(direction: direction)
+            scrollWheel(direction: cfg.direction)
             if i < count - 1 {
-                try await Task.sleep(for: .milliseconds(100))
+                try await Task.sleep(for: .milliseconds(interTickMs))
             }
         }
     }

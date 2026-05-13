@@ -205,6 +205,18 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "옵션" } }
       }
     },
+    "Slow interval" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "느린 간격" } }
+      }
+    },
+    "Spaces wheel ticks further apart so apps like Android Emulator don't add momentum scrolling." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "휠 틱 사이의 간격을 늘려서 Android Emulator 같은 앱이 관성 스크롤을 추가하지 않게 합니다." } }
+      }
+    },
     "Path" : {
       "extractionState" : "manual",
       "localizations" : {

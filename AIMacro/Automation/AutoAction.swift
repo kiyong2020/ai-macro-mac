@@ -411,17 +411,72 @@ extension AutoAction {
     }
 }
 
-// MARK: - .scroll direction
+// MARK: - .scroll direction + options
+
+/// Encoded as `action.text`:
+/// - `""`           → down, no flags (legacy default)
+/// - `"up"`         → up, no flags (legacy)
+/// - `"down|slow"`  → down, slower inter-tick delay (avoids the receiving
+///                    app — e.g. Android Emulator/Qt — turning a rapid
+///                    burst into a kinetic flick).
+struct ScrollConfig {
+    var direction: ScrollDirection = .down
+    /// When true, the runner spaces ticks further apart so flick-detecting
+    /// receivers don't add their own deceleration.
+    var slow: Bool = false
+
+    static func parse(_ raw: String) -> ScrollConfig {
+        var cfg = ScrollConfig()
+        let parts = raw.split(separator: "|", maxSplits: 1,
+                              omittingEmptySubsequences: false).map(String.init)
+        if !parts.isEmpty {
+            cfg.direction = ScrollDirection.parse(parts[0])
+        }
+        if parts.count >= 2 {
+            for tok in parts[1].split(separator: ",") {
+                if tok.lowercased() == "slow" { cfg.slow = true }
+            }
+        }
+        return cfg
+    }
+
+    func encode() -> String {
+        var flags: [String] = []
+        if slow { flags.append("slow") }
+        if flags.isEmpty {
+            // Preserve legacy form so existing saves don't get rewritten on
+            // first load.
+            return direction.rawValue
+        }
+        return "\(direction.rawValue)|\(flags.joined(separator: ","))"
+    }
+}
 
 extension AutoAction {
+    var scrollConfig: ScrollConfig {
+        ScrollConfig.parse((try? text.value()) ?? "")
+    }
+
+    func setScrollConfig(_ cfg: ScrollConfig) {
+        text.onNext(cfg.encode())
+    }
+
     /// Direction for `.scroll` actions, decoded from `action.text`.
     /// Defaults to `.down` for legacy rows where `text` is empty.
     var scrollDirection: ScrollDirection {
-        ScrollDirection.parse((try? text.value()) ?? "")
+        scrollConfig.direction
     }
 
     func setScrollDirection(_ direction: ScrollDirection) {
-        text.onNext(direction.rawValue)
+        var cfg = scrollConfig
+        cfg.direction = direction
+        setScrollConfig(cfg)
+    }
+
+    func setScrollSlow(_ slow: Bool) {
+        var cfg = scrollConfig
+        cfg.slow = slow
+        setScrollConfig(cfg)
     }
 }
 

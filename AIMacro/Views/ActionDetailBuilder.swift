@@ -189,6 +189,9 @@ final class ActionDetailBuilder {
             card.addRow(label: L("Repeat"),
                         control: makeCountField(action, disposeBag: disposeBag, suffix: "틱"),
                         hint: "1틱 ≈ 휠 한 칸 (3줄)")
+            card.addRow(label: L("Options"),
+                        control: makeScrollSlowControl(action, disposeBag: disposeBag),
+                        hint: L("Spaces wheel ticks further apart so apps like Android Emulator don't add momentum scrolling."))
             card.addRow(label: L("Record"),
                         control: makeScrollRecorderButton(action, disposeBag: disposeBag),
                         hint: "버튼을 누른 뒤 실제로 스크롤하면 방향·틱 수가 자동 입력")
@@ -441,6 +444,37 @@ final class ActionDetailBuilder {
     }
 
     private static var scrollDirectionBridgeAssocKey: UInt8 = 0
+
+    /// Single checkbox that flips `ScrollConfig.slow`. The runner widens the
+    /// inter-tick gap when this is on, which avoids momentum/inertia being
+    /// synthesised on top of our discrete ticks by flick-detecting receivers
+    /// (Android Emulator's Qt widgets being the motivating case).
+    private func makeScrollSlowControl(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
+        let checkbox = NSButton(checkboxWithTitle: L("Slow interval"),
+                                target: nil, action: nil)
+        checkbox.state = action.scrollConfig.slow ? .on : .off
+        checkbox.translatesAutoresizingMaskIntoConstraints = false
+
+        let bridge = ScrollSlowBridge(action: action, checkbox: checkbox)
+        checkbox.target = bridge
+        checkbox.action = #selector(ScrollSlowBridge.toggled)
+        objc_setAssociatedObject(checkbox, &Self.scrollSlowBridgeAssocKey,
+                                 bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        // Keep the checkbox in sync when text changes from elsewhere
+        // (e.g. scroll recorder rewriting the direction).
+        action.text
+            .observe(on: MainScheduler.instance)
+            .subscribe(onNext: { [weak checkbox, weak action] _ in
+                guard let checkbox = checkbox, let action = action else { return }
+                let desired: NSControl.StateValue = action.scrollConfig.slow ? .on : .off
+                if checkbox.state != desired { checkbox.state = desired }
+            })
+            .disposed(by: disposeBag)
+        return checkbox
+    }
+
+    private static var scrollSlowBridgeAssocKey: UInt8 = 0
 
     /// "🎯 스크롤 녹화" button — taps the system scroll event stream,
     /// accumulates deltas until the user pauses, then auto-fills direction
@@ -2162,6 +2196,21 @@ private final class ScrollDirectionBridge: NSObject {
     @objc func changed(_ sender: NSSegmentedControl) {
         guard directions.indices.contains(sender.selectedSegment) else { return }
         action?.setScrollDirection(directions[sender.selectedSegment])
+    }
+}
+
+/// Checkbox shim for the `.scroll` "느린 간격" option.
+private final class ScrollSlowBridge: NSObject {
+    private weak var action: AutoAction?
+    let checkbox: NSButton
+
+    init(action: AutoAction, checkbox: NSButton) {
+        self.action = action
+        self.checkbox = checkbox
+    }
+
+    @objc func toggled() {
+        action?.setScrollSlow(checkbox.state == .on)
     }
 }
 
