@@ -8,12 +8,19 @@
 //
 
 import Cocoa
+import IOKit.pwr_mgt
 import RxSwift
 
 final class AutomationRunner {
     let mouseListener: MouseListener
     let keyboardListener: GlobalKeyListener
     let screenCapturer = ScreenCapturer()
+
+    /// IOPMAssertion ID held while a run is in flight to keep the display
+    /// awake. Without this, a long `wait(.time)` lets the display idle-sleep
+    /// and the next OCR action sees only black frames (Vision returns no
+    /// text, the action times out with an empty scan).
+    private var displaySleepAssertion: IOPMAssertionID = 0
 
     // MARK: - Public state for the UI
 
@@ -66,6 +73,29 @@ final class AutomationRunner {
         mouseListener.stop()
         keyboardListener.stop()
         OCRDebugWindow.shared.hide()
+        releaseDisplaySleepAssertion()
+    }
+
+    private func acquireDisplaySleepAssertion() {
+        guard displaySleepAssertion == 0 else { return }
+        var id: IOPMAssertionID = 0
+        let result = IOPMAssertionCreateWithName(
+            kIOPMAssertionTypeNoDisplaySleep as CFString,
+            IOPMAssertionLevel(kIOPMAssertionLevelOn),
+            "Macroony automation in progress" as CFString,
+            &id
+        )
+        if result == kIOReturnSuccess {
+            displaySleepAssertion = id
+        } else {
+            AppLogger.shared.log("⚠️ 디스플레이 절전 방지 실패 (err=\(result))")
+        }
+    }
+
+    private func releaseDisplaySleepAssertion() {
+        guard displaySleepAssertion != 0 else { return }
+        IOPMAssertionRelease(displaySleepAssertion)
+        displaySleepAssertion = 0
     }
 
     /// Run the full action list sequentially. Per-action errors are surfaced via
@@ -76,6 +106,12 @@ final class AutomationRunner {
         // logs stay console-only.
         AppLogger.shared.startSession()
         defer { AppLogger.shared.endSession() }
+
+        // Hold a display-sleep assertion for the full run. wait(.time) can
+        // sleep for hours; without this the screen idles off and the next
+        // OCR action gets black frames from SCStream.
+        acquireDisplaySleepAssertion()
+        defer { releaseDisplaySleepAssertion() }
 
         // Broadcast first so any listener (KeyUtil cache, etc.) can wipe stale
         // per-run state before the first action fires.
