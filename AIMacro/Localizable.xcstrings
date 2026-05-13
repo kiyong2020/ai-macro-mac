@@ -85,10 +85,10 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "드래그" } }
       }
     },
-    "Duplicate current flow" : {
+    "Add flow" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "현재 플로우 복제" } }
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "플로우 추가" } }
       }
     },
     "Height" : {

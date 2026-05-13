@@ -588,8 +588,8 @@ class ViewController: NSViewController {
         // [+] popup [편집] — matches the redesign's scenario row. The
         // settings button on the right is the storyboard's existing 설정
         // button, already wired to `onSettings:`.
-        let addBtn = smallButton("＋", #selector(onAddScenario))
-        addBtn.toolTip = L("Duplicate current flow")
+        let addBtn = smallButton("＋", #selector(onAddScenario(_:)))
+        addBtn.toolTip = L("Add flow")
 
         scenarioPopup = NSPopUpButton(frame: .zero, pullsDown: false)
         scenarioPopup.target = self
@@ -696,7 +696,39 @@ class ViewController: NSViewController {
         }
     }
 
-    @objc private func onAddScenario() {
+    @objc private func onAddScenario(_ sender: Any?) {
+        // Already recording — clicking + again just no-ops; the HUD already
+        // tells the user how to finish.
+        if sequenceRecorder != nil {
+            AppLogger.shared.log("⚠️ 시퀀스 녹화 중 — ESC 로 먼저 종료하세요.")
+            return
+        }
+
+        let menu = NSMenu()
+
+        let empty = NSMenuItem(title: "빈 플로우 생성",
+                               action: #selector(addEmptyScenario(_:)),
+                               keyEquivalent: "")
+        empty.target = self
+        menu.addItem(empty)
+
+        let record = NSMenuItem(title: "시퀀스로 기록",
+                                action: #selector(beginSequenceRecording(_:)),
+                                keyEquivalent: "")
+        record.target = self
+        menu.addItem(record)
+
+        if let button = sender as? NSView {
+            // Drop the menu just below the + button so the popup feels
+            // anchored to it.
+            let origin = NSPoint(x: 0, y: button.bounds.height + 4)
+            menu.popUp(positioning: nil, at: origin, in: button)
+        } else if let event = NSApp.currentEvent, let view = self.view as NSView? {
+            NSMenu.popUpContextMenu(menu, with: event, for: view)
+        }
+    }
+
+    @objc private func addEmptyScenario(_ sender: Any?) {
         let store = ScenarioStore.shared
         let baseName = store.scenarios.indices.contains(currentScenarioIndex)
             ? store.scenarios[currentScenarioIndex].name
@@ -708,6 +740,112 @@ class ViewController: NSViewController {
         refreshScenarioPopup()
         loadCurrentScenario()
         AppLogger.shared.log("➕ 플로우 추가: \(newName)")
+    }
+
+    /// Holds the active SequenceRecorder so its underlying CGEventTap stays
+    /// alive — recorders self-destruct when this reference drops.
+    private var sequenceRecorder: SequenceRecorder?
+    /// Floating HUD shown during sequence recording. Non-interactive
+    /// (`ignoresMouseEvents = true`) so the user's clicks pass through to
+    /// whatever they're demonstrating on.
+    private var recordingHUD: NSPanel?
+
+    @objc private func beginSequenceRecording(_ sender: Any?) {
+        guard sequenceRecorder == nil else { return }
+
+        // Create the empty flow first so captured actions have somewhere to
+        // land. Reusing the empty-flow path keeps naming + selection logic
+        // in one place.
+        addEmptyScenario(sender)
+        let flowName = ScenarioStore.shared.scenarios.indices.contains(currentScenarioIndex)
+            ? ScenarioStore.shared.scenarios[currentScenarioIndex].name
+            : ""
+        AppLogger.shared.log("⏺ 시퀀스 녹화 시작: \(flowName) — ESC 로 종료")
+
+        showRecordingHUD()
+
+        let recorder = SequenceRecorder()
+        sequenceRecorder = recorder
+        recorder.onAction = { [weak self] action in
+            self?.appendRecordedAction(action)
+        }
+        recorder.onEnd = { [weak self] in
+            self?.finishSequenceRecording()
+        }
+        recorder.start()
+    }
+
+    /// Insert a recorded action at the end of the current flow and refresh
+    /// the table so the user sees it appear live.
+    private func appendRecordedAction(_ action: AutoAction) {
+        let store = ScenarioStore.shared
+        guard store.scenarios.indices.contains(currentScenarioIndex) else { return }
+        let scenario = store.scenarios[currentScenarioIndex]
+        action.group = scenario.name
+        action.save()
+        store.insertAction(action,
+                           inScenarioAt: currentScenarioIndex,
+                           atActionIndex: scenario.actions.count)
+        loadCurrentScenario()
+    }
+
+    private func finishSequenceRecording() {
+        sequenceRecorder = nil
+        hideRecordingHUD()
+        let count = (try? actions.value().count) ?? 0
+        AppLogger.shared.log("⏹ 시퀀스 녹화 종료 — \(count)개 액션")
+    }
+
+    private func showRecordingHUD() {
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 56),
+                            styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered,
+                            defer: false)
+        panel.level = .floating
+        panel.isFloatingPanel = true
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.ignoresMouseEvents = true
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+        let backdrop = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 320, height: 56))
+        backdrop.material = .hudWindow
+        backdrop.blendingMode = .behindWindow
+        backdrop.state = .active
+        backdrop.wantsLayer = true
+        backdrop.layer?.cornerRadius = 12
+        backdrop.layer?.masksToBounds = true
+        backdrop.autoresizingMask = [.width, .height]
+
+        let label = NSTextField(labelWithString: "🔴  녹화 중 — ESC 키로 종료")
+        label.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        label.textColor = .labelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+        backdrop.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: backdrop.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: backdrop.centerYAnchor),
+        ])
+
+        panel.contentView = backdrop
+
+        if let screen = NSScreen.main {
+            let visible = screen.visibleFrame
+            let pf = panel.frame
+            let x = visible.midX - pf.width / 2
+            let y = visible.maxY - pf.height - 30
+            panel.setFrameOrigin(NSPoint(x: x, y: y))
+        }
+
+        panel.orderFrontRegardless()
+        recordingHUD = panel
+    }
+
+    private func hideRecordingHUD() {
+        recordingHUD?.orderOut(nil)
+        recordingHUD = nil
     }
 
     /// Modal dialog with a name text field and three buttons: 확인 / 취소 /
