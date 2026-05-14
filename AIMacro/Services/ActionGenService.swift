@@ -37,13 +37,27 @@ final class ActionGenService {
         var errorDescription: String? { message }
     }
 
+    /// Minimal scenario info the AI needs to branch via `nextScenario`.
+    /// Pass an empty array to disable branching.
+    struct ScenarioInfo {
+        let id: String
+        let name: String
+    }
+
     /// Send the captured region + instruction to the server. Coordinates
     /// in the response are in the image's local pixel space (top-left
     /// origin); callers translate to screen-space by adding the capture
     /// region's origin before running the actions.
+    ///
+    /// - Parameters:
+    ///   - scenarios: Flows the AI may branch to. Empty disables branching.
+    ///   - currentScenarioId: UUID of the flow `.aiGen` is running inside.
+    ///     The AI is told not to branch to itself.
     func generate(image: NSImage,
                   instruction: String,
-                  defaultDelay: Double) async throws -> [GeneratedActionJSON] {
+                  defaultDelay: Double,
+                  scenarios: [ScenarioInfo] = [],
+                  currentScenarioId: String? = nil) async throws -> [GeneratedActionJSON] {
         guard let pngData = pngData(from: image) else {
             throw GenerateError(message: "이미지 인코딩 실패")
         }
@@ -56,12 +70,18 @@ final class ActionGenService {
         }
 
         let url = Constants.baseServerURL.trimmingCharacters(in: .init(charactersIn: "/")) + "/generate-actions"
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "image": base64,
             "image_wh": [width, height],
             "instruction": instruction,
             "default_delay": defaultDelay,
         ]
+        if !scenarios.isEmpty {
+            body["scenarios"] = scenarios.map { ["id": $0.id, "name": $0.name] }
+        }
+        if let cur = currentScenarioId, !cur.isEmpty {
+            body["current_scenario_id"] = cur
+        }
 
         let response = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[String: Any], Error>) in
             session.request(url,

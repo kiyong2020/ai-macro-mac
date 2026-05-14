@@ -51,6 +51,12 @@ final class AutomationRunner {
     /// - `.specific(id:)`  — jump to the scenario with the given UUID
     private(set) var nextScenarioRequest: NextScenarioRequest?
 
+    /// UUID of the scenario whose actions are currently being executed.
+    /// Set by the view controller before each call to `run(_:)` so the
+    /// `.aiGen` handler can tell the server which flow it's inside (and
+    /// the server can keep the AI from branching to itself).
+    var currentScenarioId: String?
+
     enum NextScenarioRequest {
         case next
         case specific(id: String)
@@ -214,12 +220,20 @@ final class AutomationRunner {
         let baseDelay = max(0.05, Preferences.defaultActionDelay)
         AppLogger.shared.log("🤖 AI 액션 호출 중… (지시문: \(instruction.prefix(40))…)")
 
+        // Branch options: every scenario in the store. The server filters
+        // out the current one (we also tag it via `currentScenarioId`).
+        let scenarios = ScenarioStore.shared.scenarios.map {
+            ActionGenService.ScenarioInfo(id: $0.id.uuidString, name: $0.name)
+        }
+
         let rawActions: [[String: Any]]
         do {
             rawActions = try await ActionGenService.shared.generate(
                 image: img,
                 instruction: instruction,
-                defaultDelay: baseDelay
+                defaultDelay: baseDelay,
+                scenarios: scenarios,
+                currentScenarioId: currentScenarioId
             )
         } catch {
             AppLogger.shared.log("⚠️ AI 액션 — 서버 호출 실패: \(error.localizedDescription)")
@@ -287,6 +301,14 @@ final class AutomationRunner {
                 try await run(gen)
             } catch {
                 AppLogger.shared.log("⚠️ AI 생성 액션 '\(gen.name)' 실패: \(error.localizedDescription)")
+            }
+            // A generated `.nextScenario` sets this flag — bail out so
+            // subsequent generated steps don't run on the soon-to-be-
+            // abandoned flow. The outer run loop also checks the same
+            // flag and routes to the requested scenario.
+            if nextScenarioRequest != nil {
+                AppLogger.shared.log("🤖 AI 액션 — 플로우 전환 요청 감지, 남은 단계 중단")
+                break
             }
         }
         AppLogger.shared.log("🤖 AI 액션 완료")

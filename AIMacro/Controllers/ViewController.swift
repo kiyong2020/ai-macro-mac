@@ -1292,6 +1292,14 @@ class ViewController: NSViewController {
             self?.progressLabel.stringValue = String(format: "T+%.2fs",
                                                      Date().timeIntervalSince(startTime))
         }
+        // Tag the runner with which scenario it's about to execute, so
+        // `.aiGen` can tell the server which flow not to branch back to.
+        let store = ScenarioStore.shared
+        if store.scenarios.indices.contains(currentScenarioIndex) {
+            runner.currentScenarioId = store.scenarios[currentScenarioIndex].id.uuidString
+        } else {
+            runner.currentScenarioId = nil
+        }
         self.task = Task { [weak self] in
             guard let self = self else { return }
             try? await self.runner.run(try! self.actions.value())
