@@ -8,9 +8,8 @@ class ScanPreviewPanel: NSPanel {
     private let previewView = ScanPreviewView()
     private var moveMonitor: Any?
     private var localMoveMonitor: Any?
-    /// Logical-point size of the highlighted area. Square for the OCR scan
-    /// preview (default = `Constants.ocrCaptureSize`), arbitrary W×H for the
-    /// `.openBrowser` window-position picker.
+    /// Logical-point size of the highlighted area. Set per call via
+    /// `show(rectSize:)`. Initial value is just a non-zero placeholder.
     private var size: CGSize = CGSize(width: Constants.ocrCaptureSize,
                                       height: Constants.ocrCaptureSize)
 
@@ -29,13 +28,8 @@ class ScanPreviewPanel: NSPanel {
         contentView = previewView
     }
 
-    /// Square preview convenience — used by the OCR position picker.
-    func show(size: CGFloat = Constants.ocrCaptureSize) {
-        show(rectSize: CGSize(width: size, height: size))
-    }
-
-    /// Rectangular preview — used by the `.openBrowser` position picker so the
-    /// floating overlay matches the user-entered window size.
+    /// Rectangular preview — used by every position picker so the floating
+    /// overlay matches the action's configured capture area.
     func show(rectSize: CGSize) {
         self.size = CGSize(width: max(20, rectSize.width),
                            height: max(20, rectSize.height))

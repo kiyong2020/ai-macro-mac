@@ -41,8 +41,9 @@ final class SequenceRecorder {
     var dragThreshold: CGFloat = 5
     /// Spacing between intermediate drag waypoints. Matches MouseDragRecorder
     /// so playback feels consistent regardless of which recorder produced
-    /// the action.
-    var dragSampleDistance: CGFloat = 40
+    /// the action. 5 pt preserves enough detail for the literal drag replay
+    /// (in `dragMove`) to reproduce the user's speed and curve faithfully.
+    var dragSampleDistance: CGFloat = 5
     /// Inactivity that closes a scroll group and emits the `.scroll` action.
     var scrollIdleMs: Int = 400
 
@@ -55,7 +56,8 @@ final class SequenceRecorder {
     private var downModifiers: NSEvent.ModifierFlags = []
     private var downButton: ClickButton = .left
     private var lastSamplePoint: CGPoint?
-    private var dragWaypoints: [CGPoint] = []
+    private var dragWaypoints: [DragWaypoint] = []
+    private var dragStartTime: Date?
     private var didCrossDragThreshold = false
 
     // Scroll grouping state
@@ -163,6 +165,7 @@ final class SequenceRecorder {
         downModifiers = nsEventFlags(from: modifiers)
         lastSamplePoint = point
         dragWaypoints = []
+        dragStartTime = nil
         didCrossDragThreshold = false
     }
 
@@ -173,6 +176,10 @@ final class SequenceRecorder {
             let dy0 = point.y - downPoint.y
             if (dx0 * dx0 + dy0 * dy0) >= dragThreshold * dragThreshold {
                 didCrossDragThreshold = true
+                // Anchor drag timing on the first dragged event past the
+                // threshold so subsequent waypoints' tMs measure actual
+                // motion, matching `MouseDragRecorder`.
+                dragStartTime = Date()
             }
         }
         guard didCrossDragThreshold else { return }
@@ -180,7 +187,7 @@ final class SequenceRecorder {
             let dx = point.x - last.x
             let dy = point.y - last.y
             if (dx * dx + dy * dy) >= dragSampleDistance * dragSampleDistance {
-                dragWaypoints.append(point)
+                dragWaypoints.append(DragWaypoint(point: point, tMs: dragElapsedMs()))
                 lastSamplePoint = point
             }
         } else {
@@ -194,8 +201,8 @@ final class SequenceRecorder {
         if didCrossDragThreshold {
             // Drag — guarantee the final waypoint is the release point so
             // the runner knows where to lift the button.
-            if dragWaypoints.last != point {
-                dragWaypoints.append(point)
+            if dragWaypoints.last?.point != point {
+                dragWaypoints.append(DragWaypoint(point: point, tMs: dragElapsedMs()))
             }
             emitDrag(start: downPoint, waypoints: dragWaypoints)
         } else {
@@ -203,7 +210,13 @@ final class SequenceRecorder {
         }
         lastSamplePoint = nil
         dragWaypoints = []
+        dragStartTime = nil
         didCrossDragThreshold = false
+    }
+
+    private func dragElapsedMs() -> Int {
+        guard let t0 = dragStartTime else { return 0 }
+        return max(0, Int(Date().timeIntervalSince(t0) * 1000))
     }
 
     // MARK: - Scroll grouping
@@ -277,15 +290,16 @@ final class SequenceRecorder {
         DispatchQueue.main.async { cb?(action) }
     }
 
-    private func emitDrag(start: CGPoint, waypoints: [CGPoint]) {
+    private func emitDrag(start: CGPoint, waypoints: [DragWaypoint]) {
         let action = AutoAction(type: .drag,
                                 name: "New 드래그",
                                 point: start,
                                 delay: nextDelay(),
                                 count: 1,
                                 text: "")
-        action.setDragWaypoints(waypoints)
-        AppLogger.shared.log("⏺ 녹화 → 드래그 \(waypoints.count)포인트")
+        action.setDragWaypointsTimed(waypoints)
+        let totalMs = waypoints.last?.tMs ?? 0
+        AppLogger.shared.log("⏺ 녹화 → 드래그 \(waypoints.count)포인트, \(totalMs)ms")
         let cb = onAction
         DispatchQueue.main.async { cb?(action) }
     }

@@ -16,6 +16,15 @@ enum Preferences {
         set { UserDefaults.standard.set(max(0, newValue), forKey: "maxRandomDelay") }
     }
 
+    /// Global base delay (seconds) added before every action runs, on top
+    /// of the action's own configured delay. Lets the user globally slow
+    /// down (or pad) a macro without editing each action individually.
+    /// Set to 0 to disable.
+    static var defaultActionDelay: Double {
+        get { UserDefaults.standard.double(forKey: "defaultActionDelay") }
+        set { UserDefaults.standard.set(max(0, newValue), forKey: "defaultActionDelay") }
+    }
+
     /// UUID string of the scenario the user had selected when the app last
     /// quit. Used to restore the popup selection on launch (we use id rather
     /// than index so renames/reorders don't break the restore).

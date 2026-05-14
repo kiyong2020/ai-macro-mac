@@ -121,6 +121,12 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "위치" } }
       }
     },
+    "Action default delay (sec):" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "액션 기본 딜레이(초):" } }
+      }
+    },
     "Max random delay (sec):" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -449,6 +455,12 @@
       "extractionState" : "manual",
       "localizations" : {
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "🎯 스크롤 녹화" } }
+      }
+    },
+    "🔲 Drag to Select Area" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "🔲 드래그로 영역 지정" } }
       }
     },
     "🪟 Restore" : {

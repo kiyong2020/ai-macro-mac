@@ -79,11 +79,18 @@ private func performClick(at point: CGPoint,
     }
 }
 
-/// Synthesises a left-button drag: cursor moves to `start`, button down,
-/// smooth `.leftMouseDragged` events through each waypoint in order, then
-/// button up at the last waypoint (or at `start` if `waypoints` is empty,
-/// which makes the drag behave as a long-press).
-func dragMove(start: CGPoint, waypoints: [CGPoint]) async {
+/// Synthesises a left-button drag from a timed path captured by
+/// `MouseDragRecorder` / `SequenceRecorder`. The cursor moves to `start`,
+/// the button is pressed, the recorded waypoints are replayed with their
+/// original inter-sample timing so the drag matches the user's actual
+/// speed and pattern, then the button is released at the last waypoint
+/// (or at `start` if `waypoints` is empty, which makes the drag behave
+/// as a long-press).
+///
+/// Backward compatibility: actions saved before timing was recorded have
+/// `tMs == DragWaypoint.legacyTMs` for every waypoint. In that case the
+/// playback falls back to the older bezier-smoothed path.
+func dragMove(start: CGPoint, waypoints: [DragWaypoint]) async {
     await simulateMouseMove(to: start)
     let source = CGEventSource(stateID: .hidSystemState)
 
@@ -95,15 +102,46 @@ func dragMove(start: CGPoint, waypoints: [CGPoint]) async {
     // the drag stream begins (some apps need a few ms to enter drag mode).
     try? await Task.sleep(for: .milliseconds(30))
 
-    for wp in waypoints {
-        await simulateMouseDrag(to: wp)
+    let hasTiming = waypoints.contains { $0.tMs != DragWaypoint.legacyTMs }
+    if hasTiming {
+        await replayTimedDrag(waypoints: waypoints)
+    } else {
+        for wp in waypoints {
+            await simulateMouseDrag(to: wp.point)
+        }
     }
 
-    let endPos = waypoints.last ?? start
+    let endPos = waypoints.last?.point ?? start
     let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp,
                      mouseCursorPosition: endPos, mouseButton: .left)
     up?.setIntegerValueField(.mouseEventClickState, value: 1)
     up?.post(tap: .cghidEventTap)
+    // Keep the simulated-cursor cache in sync so a follow-up mouse move
+    // starts from where this drag ended instead of jumping.
+    lastSimulatedPosition = endPos
+}
+
+/// Literal replay: posts `.leftMouseDragged` at each recorded waypoint
+/// after sleeping the recorded inter-sample gap. With the recorder's
+/// 5 pt sampling, gaps are dense enough (~5–20 ms apart at normal speed)
+/// that no per-segment interpolation is needed for the path to read as
+/// smooth. The wall-clock anchor drifts forward if a particular post
+/// takes longer than expected, so a slow event doesn't accumulate lag.
+private func replayTimedDrag(waypoints: [DragWaypoint]) async {
+    let startTime = Date()
+    for wp in waypoints {
+        let targetMs = max(0, wp.tMs)
+        let elapsedMs = Int(Date().timeIntervalSince(startTime) * 1000)
+        let wait = targetMs - elapsedMs
+        if wait > 0 {
+            try? await Task.sleep(for: .milliseconds(wait))
+        }
+        CGEvent(mouseEventSource: nil,
+                mouseType: .leftMouseDragged,
+                mouseCursorPosition: wp.point,
+                mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+    }
 }
 
 /// Virtual key codes for the modifier keys present in `m`. Order is fixed

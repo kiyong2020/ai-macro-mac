@@ -26,6 +26,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupGlobalObservers()
         setupStatusItem()
         attachWindowDelegate()
+        // Watch app activations so picker sessions know which app to hand
+        // focus back to when our window steps aside.
+        PreviousAppTracker.shared.start()
     }
 
     // MARK: - Status bar item
@@ -169,6 +172,48 @@ extension AppDelegate: NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         sender.orderOut(nil)
         return false
+    }
+}
+
+/// Tracks the most recently active *other* app so picker sessions can
+/// hand focus back when our window steps aside. `NSApp.deactivate()`
+/// alone is unreliable while we still have visible (nonactivating)
+/// panels — macOS may keep us frontmost, or pick an arbitrary app to
+/// activate next. By caching the prior frontmost app via the workspace
+/// activation notification we can explicitly target it.
+final class PreviousAppTracker {
+    static let shared = PreviousAppTracker()
+
+    private(set) var previousApp: NSRunningApplication?
+    private var observer: NSObjectProtocol?
+    private let myPid = ProcessInfo.processInfo.processIdentifier
+
+    private init() {}
+
+    /// Call once at app launch. Seeds with the current frontmost app (we
+    /// may have launched while another app held focus) and then keeps the
+    /// cache fresh on every workspace activation event — *unless* the
+    /// activated app is us, in which case the cache holds onto whoever
+    /// we just stole focus from.
+    func start() {
+        guard observer == nil else { return }
+        if let frontmost = NSWorkspace.shared.frontmostApplication,
+           frontmost.processIdentifier != myPid {
+            previousApp = frontmost
+        }
+        observer = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self = self,
+                  let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
+                    as? NSRunningApplication
+            else { return }
+            if app.processIdentifier != self.myPid {
+                self.previousApp = app
+            }
+        }
     }
 }
 
