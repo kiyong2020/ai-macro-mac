@@ -2,10 +2,8 @@
 //  Scenario.swift
 //  AIMacro
 //
-//  A named, ordered list of AutoActions. Replaces the hardcoded
-//  `Constants.seonam` / `seonamFull` / `yangchun` arrays as the unit the
-//  user picks via the top-of-window scenario popup. Persisted to disk by
-//  `ScenarioStore`.
+//  A named, ordered list of AutoActions. The unit the user picks via the
+//  top-of-window scenario popup. Persisted to disk by `ScenarioStore`.
 //
 
 import Foundation

@@ -3,8 +3,8 @@
 //  AIMacro
 //
 //  Persistent store for user-editable scenarios. Loads/saves a JSON file in
-//  Application Support, and seeds defaults from `Constants` on first launch
-//  so existing users don't lose their hardcoded action sequences.
+//  Application Support, and seeds a single empty default flow ("나의 플로우")
+//  on first launch.
 //
 
 import Foundation
@@ -62,6 +62,14 @@ final class ScenarioStore {
     }
 
     // MARK: - Mutations
+
+    /// Replace the entire scenario list in one shot. Used by undo/redo to
+    /// restore a captured snapshot; per-action SQLite + OCR cleanup is the
+    /// caller's responsibility (it has more context about what changed).
+    func replaceAll(with scenarios: [Scenario]) {
+        self.scenarios = scenarios
+        save()
+    }
 
     func add(_ scenario: Scenario) {
         scenarios.append(scenario)
@@ -131,11 +139,7 @@ final class ScenarioStore {
 
     private func seedDefaults() {
         scenarios = [
-            Scenario(name: "서남", actions: Constants.seonam),
-            Scenario(name: "서남 자동", actions: Constants.seonamFull),
-            Scenario(name: "양천", actions: Constants.yangchun),
-            Scenario(name: "상암", actions: Constants.sangam),
-            Scenario(name: "테스트", actions: Constants.test),
+            Scenario(name: "나의 플로우", actions: [])
         ]
     }
 }
