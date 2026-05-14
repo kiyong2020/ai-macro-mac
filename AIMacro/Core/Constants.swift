@@ -18,6 +18,11 @@ class Constants {
     /// would just be visual noise.
     static let showOCRDebugWindow: Bool = false
 
+    /// Base URL of the ai-macro-api server. The `.aiGen` action POSTs to
+    /// `<baseServerURL>/generate-actions` to translate a captured screen
+    /// region + instruction into a list of `AutoAction`s.
+    static let baseServerURL = "http://127.0.0.1:8000"
+
     static let test : [AutoAction] = [
         .init(type: .click, group: "seonam", name: "화면클릭", point: .zero, delay: 0.01),
         .init(type: .windowFrame, group: "seonam", name: "크기저장", point: .zero, delay: 1),

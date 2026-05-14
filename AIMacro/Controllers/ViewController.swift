@@ -70,6 +70,36 @@ class ViewController: NSViewController {
     /// Anchor button for the scenario-edit popover (rename + delete).
     private var scenarioEditButton: NSButton!
 
+    /// Backs undo/redo for scenario + action edits. The Edit menu's
+    /// `undo:` / `redo:` items resolve through the responder chain to
+    /// this manager via the `undoManager` override below.
+    private let undoCoordinator = UndoCoordinator()
+
+    override var undoManager: UndoManager? {
+        return undoCoordinator.manager
+    }
+
+    /// The Edit menu's Undo/Redo items target the First Responder. We
+    /// implement them explicitly so the responder-chain lookup definitely
+    /// finds something — NSResponder's default `undo:`/`redo:` aren't
+    /// universally available across SDK versions.
+    @IBAction func undo(_ sender: Any?) {
+        if undoCoordinator.manager.canUndo { undoCoordinator.manager.undo() }
+    }
+
+    @IBAction func redo(_ sender: Any?) {
+        if undoCoordinator.manager.canRedo { undoCoordinator.manager.redo() }
+    }
+
+    /// Enable/disable Undo + Redo menu items based on the coordinator's state.
+    @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(undo(_:)): return undoCoordinator.manager.canUndo
+        case #selector(redo(_:)): return undoCoordinator.manager.canRedo
+        default: return true
+        }
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         setupStatusAndLogView()
@@ -94,6 +124,20 @@ class ViewController: NSViewController {
         restoreLastSelectedScenario()
         refreshScenarioPopup()
         loadCurrentScenario()
+
+        // Initial baseline — subsequent mutations register inverses against
+        // this snapshot. Must come after the first loadCurrentScenario so
+        // `selectedRow` matches what the user actually sees.
+        undoCoordinator.bind(to: self)
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        // The window becomes the first responder when nothing else owns it;
+        // making the view controller's view the firstResponder lets the
+        // responder-chain `undo:` / `redo:` action land on us when no text
+        // field has focus.
+        view.window?.makeFirstResponder(view)
     }
 
     /// Look up the scenario whose UUID matches the last saved selection and
@@ -206,9 +250,13 @@ class ViewController: NSViewController {
             self?.refreshDetailPane()
         }
 
-        // When a name is edited in the detail pane, reflect it in the list.
+        // When a name is edited in the detail pane, reflect it in the list
+        // and snapshot for undo. Name lives on the action directly (not a
+        // BehaviorSubject) so the throttled merge in `loadCurrentScenario`
+        // doesn't see it — capture explicitly here.
         detailBuilder.onActionRenamed = { [weak self] in
             self?.tableView.reloadData()
+            self?.undoCoordinator.captureIfChanged()
         }
     }
 
@@ -231,6 +279,12 @@ class ViewController: NSViewController {
             view.bottomAnchor.constraint(equalTo: detailContainer.bottomAnchor),
         ])
         detailContent = view
+        // Force layout to fully resolve now so the freshly-built form
+        // settles before the user sees it — without this, NSStackView's
+        // intrinsic-size measurements can race with constraint resolution
+        // and produce intermittent inter-row spacing on selection changes.
+        detailContainer.needsLayout = true
+        detailContainer.layoutSubtreeIfNeeded()
     }
 
     // MARK: - View setup
@@ -666,11 +720,17 @@ class ViewController: NSViewController {
         currentScenarioIndex = idx
         persistCurrentScenarioSelection()
         loadCurrentScenario()
+        // Scenario switching is navigation, not a mutation — re-anchor the
+        // baseline so the next edit registers its inverse against this view,
+        // not whatever scenario the user was last looking at.
+        undoCoordinator.resetBaseline()
     }
 
     /// Push the currently-selected scenario's actions into `self.actions`,
     /// hook up per-action UserDefaults persistence, and refresh the table.
-    private func loadCurrentScenario() {
+    /// Pass `selectRow` to override the default "select row 0" behavior — e.g.
+    /// callers that just inserted a row want the new row selected instead.
+    private func loadCurrentScenario(selectRow: Int? = nil) {
         let store = ScenarioStore.shared
         guard store.scenarios.indices.contains(currentScenarioIndex) else { return }
         let actions = store.scenarios[currentScenarioIndex].actions
@@ -683,14 +743,18 @@ class ViewController: NSViewController {
                                    a.count.map { _ in true },
                                    a.text.map  { _ in true })
                 .throttle(.milliseconds(500), scheduler: MainScheduler.instance)
-                .subscribe { _ in a.save() }
+                .subscribe { [weak self] _ in
+                    a.save()
+                    self?.undoCoordinator.captureIfChanged()
+                }
                 .disposed(by: actionsBag)
         }
         tableView.reloadData()
 
-        // Auto-select the first row so the detail pane has something to show.
         if !actions.isEmpty {
-            tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            let target = max(0, min(selectRow ?? 0, actions.count - 1))
+            tableView.selectRowIndexes(IndexSet(integer: target), byExtendingSelection: false)
+            tableView.scrollRowToVisible(target)
         } else {
             refreshDetailPane()
         }
@@ -705,12 +769,23 @@ class ViewController: NSViewController {
         }
 
         let menu = NSMenu()
+        // Honor explicit isEnabled values below instead of asking the
+        // responder chain via validateMenuItem(_:).
+        menu.autoenablesItems = false
 
         let empty = NSMenuItem(title: "빈 플로우 생성",
                                action: #selector(addEmptyScenario(_:)),
                                keyEquivalent: "")
         empty.target = self
         menu.addItem(empty)
+
+        let duplicate = NSMenuItem(title: "현재 플로우 복제",
+                                   action: #selector(duplicateCurrentScenario(_:)),
+                                   keyEquivalent: "")
+        duplicate.target = self
+        // Greyed out when there's no scenario to copy.
+        duplicate.isEnabled = ScenarioStore.shared.scenarios.indices.contains(currentScenarioIndex)
+        menu.addItem(duplicate)
 
         let record = NSMenuItem(title: "시퀀스로 기록",
                                 action: #selector(beginSequenceRecording(_:)),
@@ -739,7 +814,35 @@ class ViewController: NSViewController {
         persistCurrentScenarioSelection()
         refreshScenarioPopup()
         loadCurrentScenario()
+        undoCoordinator.captureIfChanged()
         AppLogger.shared.log("➕ 플로우 추가: \(newName)")
+    }
+
+    @objc private func duplicateCurrentScenario(_ sender: Any?) {
+        let store = ScenarioStore.shared
+        guard store.scenarios.indices.contains(currentScenarioIndex) else { return }
+        let source = store.scenarios[currentScenarioIndex]
+        let newName = uniqueScenarioName(basedOn: source.name)
+        guard store.duplicate(at: currentScenarioIndex, newName: newName) != nil else { return }
+        // ScenarioStore.duplicate appends, so the copy lives at the end.
+        currentScenarioIndex = store.scenarios.count - 1
+        persistCurrentScenarioSelection()
+        refreshScenarioPopup()
+        loadCurrentScenario()
+        undoCoordinator.captureIfChanged()
+        AppLogger.shared.log("➕ 플로우 복제: \(source.name) → \(newName)")
+    }
+
+    /// "<name> 복사", "<name> 복사 2", ... — avoids name collisions in the
+    /// popup so duplicates are visually distinguishable from the source.
+    private func uniqueScenarioName(basedOn base: String) -> String {
+        let store = ScenarioStore.shared
+        let existing = Set(store.scenarios.map { $0.name })
+        let first = "\(base) 복사"
+        if !existing.contains(first) { return first }
+        var n = 2
+        while existing.contains("\(first) \(n)") { n += 1 }
+        return "\(first) \(n)"
     }
 
     /// Holds the active SequenceRecorder so its underlying CGEventTap stays
@@ -763,6 +866,10 @@ class ViewController: NSViewController {
         AppLogger.shared.log("⏺ 시퀀스 녹화 시작: \(flowName) — ESC 로 종료")
 
         showRecordingHUD()
+        // Step out of the way so the user sees the app they're demonstrating
+        // on, matching the action-edit picker behavior. The HUD is a floating
+        // .nonactivatingPanel so it stays visible across the app handoff.
+        ActionDetailBuilder.setMainWindowHidden(true, anchor: self.view)
 
         let recorder = SequenceRecorder()
         sequenceRecorder = recorder
@@ -787,10 +894,12 @@ class ViewController: NSViewController {
                            inScenarioAt: currentScenarioIndex,
                            atActionIndex: scenario.actions.count)
         loadCurrentScenario()
+        undoCoordinator.captureIfChanged()
     }
 
     private func finishSequenceRecording() {
         sequenceRecorder = nil
+        ActionDetailBuilder.setMainWindowHidden(false, anchor: self.view)
         hideRecordingHUD()
         let count = (try? actions.value().count) ?? 0
         AppLogger.shared.log("⏹ 시퀀스 녹화 종료 — \(count)개 액션")
@@ -878,6 +987,7 @@ class ViewController: NSViewController {
                   trimmed != current.name else { return }
             store.rename(at: currentScenarioIndex, to: trimmed)
             refreshScenarioPopup()
+            undoCoordinator.captureIfChanged()
         case .alertThirdButtonReturn:
             // Reuses the existing destructive-confirm flow.
             onDeleteScenario()
@@ -955,6 +1065,7 @@ class ViewController: NSViewController {
             (L("🌐🪟  Browser"), .openBrowser(url: "")),
             (L("🪟  Window Frame"), .windowFrame),
             (L("➡️  Next Flow"), .nextScenario),
+            (L("🤖  AI Generate"), .aiGen),
         ]
         for (label, type) in types {
             let item = NSMenuItem(title: label,
@@ -1035,7 +1146,8 @@ class ViewController: NSViewController {
         store.insertAction(newAction,
                            inScenarioAt: currentScenarioIndex,
                            atActionIndex: insertIndex)
-        loadCurrentScenario()
+        loadCurrentScenario(selectRow: insertIndex)
+        undoCoordinator.captureIfChanged()
         AppLogger.shared.log("➕ 액션 추가: \(newAction.name) @ \(insertIndex)")
     }
 
@@ -1057,13 +1169,18 @@ class ViewController: NSViewController {
 
         store.deleteAction(inScenarioAt: currentScenarioIndex, atActionIndex: row)
         loadCurrentScenario()
+        undoCoordinator.captureIfChanged()
         AppLogger.shared.log("🗑 액션 삭제: \(removed.name)")
     }
 
     /// Sensible default per action type so a freshly-inserted row isn't blank.
     private func makeDefaultAction(type: AutoAction.ActionType, group: String) -> AutoAction {
         let name: String
-        var delay: Double = 0.1
+        // User-configured baseline (Settings → "액션 기본 딜레이"). Becomes
+        // the floor for every new action's delay; per-type minimums below
+        // raise it further for action types that need more time.
+        let userDefault = max(0, Preferences.defaultActionDelay)
+        var delay: Double = max(0.1, userDefault)
         var text: String = ""
         // count is 1 for click/scroll/key (반복 횟수); OCR overrides it to
         // serve as the scan-area size in px.
@@ -1079,13 +1196,14 @@ class ViewController: NSViewController {
             case .enter: name = "엔터대기"
             case .time:  name = "시간대기"; text = "09:00:00"
             }
-        case .ocr:                    name = "OCR"; delay = 0.5; count = 200
+        case .ocr:                    name = "OCR"; delay = max(0.5, userDefault); count = 200
         case .script:                 name = "스크립트"
         case .setURL:                 name = "URL설정"
         case .openChrome:             name = "새창"
-        case .openBrowser:            name = "브라우저"; delay = 0.3
+        case .openBrowser:            name = "브라우저"; delay = max(0.3, userDefault)
         case .windowFrame:            name = "창프레임"
         case .nextScenario:           name = "다음 플로우"
+        case .aiGen:                  name = "AI 생성"; delay = max(0.3, userDefault); count = 400
         }
         return AutoAction(type: type, group: group, name: "New " + name,
                           point: .zero, delay: delay, count: count, text: text)
@@ -1112,6 +1230,7 @@ class ViewController: NSViewController {
             persistCurrentScenarioSelection()
             refreshScenarioPopup()
             loadCurrentScenario()
+            undoCoordinator.captureIfChanged()
             AppLogger.shared.log("🗑 플로우 삭제: \(removedName)")
         }
     }
@@ -1309,6 +1428,12 @@ class ViewController: NSViewController {
             }
             tableView.reloadData()
         }
+
+        // Loading a document is a hard reset — drop the undo history so the
+        // user can't accidentally undo back into pre-load state and end up
+        // with a partially-applied mix.
+        undoManager?.removeAllActions()
+        undoCoordinator.resetBaseline()
     }
 
     private func currentScenarioSlug() -> String {
@@ -1317,6 +1442,52 @@ class ViewController: NSViewController {
         let name = scenarios[currentScenarioIndex].name
             .replacingOccurrences(of: " ", with: "_")
         return name.isEmpty ? "scenario" : name
+    }
+}
+
+// MARK: - Undo / Redo
+
+extension ViewController: UndoSnapshotTarget {
+    func makeUndoSnapshot() -> UndoSnapshot {
+        let payload = ScenarioStore.shared.scenarios.map { $0.toJSON() }
+        let data = (try? JSONSerialization.data(withJSONObject: payload,
+                                                options: [.sortedKeys])) ?? Data()
+        return UndoSnapshot(scenariosData: data,
+                            currentScenarioIndex: currentScenarioIndex,
+                            selectedRow: tableView.selectedRow)
+    }
+
+    func applyUndoSnapshot(_ snapshot: UndoSnapshot) {
+        // Rebuild scenarios from the snapshot payload.
+        let store = ScenarioStore.shared
+        guard let raw = try? JSONSerialization.jsonObject(with: snapshot.scenariosData),
+              let arr = raw as? [[String: Any]] else { return }
+        let restored = arr.compactMap { Scenario.fromJSON($0) }
+
+        // Identify actions that vanished so their per-action SQLite + OCR
+        // snapshot rows can be reclaimed. Anything still present has its
+        // values written back so a subsequent `restore()` reads the
+        // snapshot's values rather than stale rows.
+        let oldIds = Set(store.scenarios.flatMap { $0.actions.map { $0.id } })
+        let newIds = Set(restored.flatMap { $0.actions.map { $0.id } })
+        for id in oldIds.subtracting(newIds) {
+            ActionStore.shared.delete(id: id)
+            OCRSnapshotStore.shared.delete(actionId: id)
+        }
+        for scenario in restored {
+            for action in scenario.actions {
+                action.group = scenario.name
+                action.save()
+            }
+        }
+
+        store.replaceAll(with: restored)
+
+        let safeIndex = max(0, min(snapshot.currentScenarioIndex, restored.count - 1))
+        currentScenarioIndex = safeIndex
+        persistCurrentScenarioSelection()
+        refreshScenarioPopup()
+        loadCurrentScenario(selectRow: snapshot.selectedRow)
     }
 }
 
@@ -1390,6 +1561,7 @@ extension ViewController: NSTableViewDataSource {
 
         store.moveAction(inScenarioAt: currentScenarioIndex, from: sourceRow, to: destRow)
         loadCurrentScenario()
+        undoCoordinator.captureIfChanged()
         return true
     }
 }

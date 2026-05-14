@@ -41,6 +41,12 @@ class AutoAction {
         /// 현재 플로우를 끝내고 플로우 목록의 다음 플로우를 새로 시작.
         /// 마지막 플로우에서는 그냥 종료.
         case nextScenario
+        /// 캡처한 화면 영역 + 사용자 지시문을 ai-macro-api 의
+        /// `/generate-actions` 로 보내, 받은 액션 목록을 그 자리에서
+        /// 실행. 생성된 액션은 시나리오에 추가되지 않고 일회성으로 소비됨.
+        /// 인코딩: point=영역 중심(Quartz), count=ocr 와 동일한 width*10000+height,
+        /// text=사용자 지시문.
+        case aiGen
     }
 
     var disposeBag: DisposeBag = .init()
@@ -216,6 +222,7 @@ extension AutoAction {
         case .drag:                   return ["kind": "drag"]
         case .windowFrame:            return ["kind": "windowFrame"]
         case .nextScenario:           return ["kind": "nextScenario"]
+        case .aiGen:                  return ["kind": "aiGen"]
         }
     }
 
@@ -237,6 +244,7 @@ extension AutoAction {
         case "drag":         return .drag
         case "windowFrame":  return .windowFrame
         case "nextScenario": return .nextScenario
+        case "aiGen":        return .aiGen
         default:            return nil
         }
     }
@@ -314,6 +322,36 @@ extension AutoAction {
 
     func setBrowserFrame(_ frame: CGRect) {
         setEncodedFrame(WindowFrameUtil.encode(frame))
+    }
+}
+
+// MARK: - .ocr scan area size
+
+/// OCR scan-area size (width × height in pixels) packed into the otherwise-
+/// unused `count` field for `.ocr` actions:
+/// - `0`            → default (`Constants.ocrCaptureSize` × …, square)
+/// - `1...9999`     → legacy square (`width == height == count`)
+/// - `≥ 10000`      → `width = count / 10000`, `height = count % 10000`
+///
+/// New writes always use the packed form so width and height can be edited
+/// independently; legacy square values are still decoded correctly on read.
+extension AutoAction {
+    var ocrScanSize: CGSize {
+        let raw = (try? count.value()) ?? 0
+        if raw <= 0 {
+            return CGSize(width: Constants.ocrCaptureSize,
+                          height: Constants.ocrCaptureSize)
+        }
+        if raw < 10000 {
+            return CGSize(width: raw, height: raw)
+        }
+        return CGSize(width: raw / 10000, height: raw % 10000)
+    }
+
+    func setOCRScanSize(width: Int, height: Int) {
+        let w = max(1, min(9999, width))
+        let h = max(1, min(9999, height))
+        count.onNext(w * 10000 + h)
     }
 }
 
@@ -414,16 +452,25 @@ extension AutoAction {
 // MARK: - .scroll direction + options
 
 /// Encoded as `action.text`:
-/// - `""`           → down, no flags (legacy default)
-/// - `"up"`         → up, no flags (legacy)
-/// - `"down|slow"`  → down, slower inter-tick delay (avoids the receiving
-///                    app — e.g. Android Emulator/Qt — turning a rapid
-///                    burst into a kinetic flick).
+/// - `""`                    → down, no flags (legacy default)
+/// - `"up"`                  → up, no flags (legacy)
+/// - `"down|slow"`           → down, slower inter-tick delay (avoids the
+///                             receiving app — e.g. Android Emulator/Qt —
+///                             turning a rapid burst into a kinetic flick).
+/// - `"down|slow,delay=500"` → down + slow, with a user-tuned step delay
+///                             in ms. Absent `delay=` means the legacy
+///                             default (`ScrollConfig.defaultSlowDelayMs`).
 struct ScrollConfig {
+    static let defaultSlowDelayMs = 300
+    static let slowDelayRange = 50 ... 5000
+
     var direction: ScrollDirection = .down
     /// When true, the runner spaces ticks further apart so flick-detecting
     /// receivers don't add their own deceleration.
     var slow: Bool = false
+    /// Inter-tick delay (ms) applied only when `slow == true`. Persisted
+    /// so toggling `slow` off and back on keeps the user's chosen value.
+    var slowDelayMs: Int = defaultSlowDelayMs
 
     static func parse(_ raw: String) -> ScrollConfig {
         var cfg = ScrollConfig()
@@ -434,7 +481,15 @@ struct ScrollConfig {
         }
         if parts.count >= 2 {
             for tok in parts[1].split(separator: ",") {
-                if tok.lowercased() == "slow" { cfg.slow = true }
+                let s = String(tok).lowercased()
+                if s == "slow" {
+                    cfg.slow = true
+                } else if s.hasPrefix("delay=") {
+                    if let v = Int(s.dropFirst("delay=".count)) {
+                        cfg.slowDelayMs = max(slowDelayRange.lowerBound,
+                                              min(slowDelayRange.upperBound, v))
+                    }
+                }
             }
         }
         return cfg
@@ -442,7 +497,14 @@ struct ScrollConfig {
 
     func encode() -> String {
         var flags: [String] = []
-        if slow { flags.append("slow") }
+        if slow {
+            flags.append("slow")
+            // Only emit the delay when non-default so existing rows that
+            // used the legacy 300ms don't churn on first save.
+            if slowDelayMs != Self.defaultSlowDelayMs {
+                flags.append("delay=\(slowDelayMs)")
+            }
+        }
         if flags.isEmpty {
             // Preserve legacy form so existing saves don't get rewritten on
             // first load.
@@ -478,30 +540,79 @@ extension AutoAction {
         cfg.slow = slow
         setScrollConfig(cfg)
     }
+
+    func setScrollSlowDelay(_ ms: Int) {
+        var cfg = scrollConfig
+        cfg.slowDelayMs = max(ScrollConfig.slowDelayRange.lowerBound,
+                              min(ScrollConfig.slowDelayRange.upperBound, ms))
+        setScrollConfig(cfg)
+    }
 }
 
 // MARK: - .drag waypoints
 
+/// One step along a recorded drag path: a position plus the millisecond
+/// offset since the drag started (mouseDown), so playback can reproduce
+/// the user's actual pace — including pauses, accelerations, and the
+/// overall duration. `tMs == -1` is a sentinel meaning "no timing was
+/// recorded" (legacy 2-component waypoints from older saved actions);
+/// the runner falls back to synthetic interpolation in that case.
+struct DragWaypoint {
+    let point: CGPoint
+    let tMs: Int
+
+    static let legacyTMs: Int = -1
+}
+
 extension AutoAction {
-    /// Waypoints traversed during a drag, decoded from `action.text`
-    /// (`"x1,y1;x2,y2;…"`). The drag starts at `action.point`, animates
-    /// through every waypoint in order, and releases at the last one.
-    /// Empty list means "no movement" — the runner still presses + releases
-    /// at the start point, behaving as a long-press.
-    var dragWaypoints: [CGPoint] {
+    /// Waypoints traversed during a drag, decoded from `action.text`. The
+    /// drag starts at `action.point`, animates through every waypoint in
+    /// order, and releases at the last one. Empty list ⇒ "no movement";
+    /// the runner still presses + releases at the start point, behaving
+    /// as a long-press.
+    ///
+    /// Format:
+    /// - New (timed):  `"x,y,tMs;x,y,tMs;…"` — tMs = ms since drag start.
+    /// - Legacy:       `"x,y;x,y;…"` — no timing; per-waypoint tMs is set
+    ///   to `DragWaypoint.legacyTMs` and the runner falls back to its
+    ///   synthetic bezier replay.
+    var dragWaypointsTimed: [DragWaypoint] {
         let raw = (try? text.value()) ?? ""
         guard !raw.isEmpty else { return [] }
-        return raw.split(separator: ";").compactMap { s -> CGPoint? in
+        return raw.split(separator: ";").compactMap { s -> DragWaypoint? in
             let parts = s.split(separator: ",")
-            guard parts.count == 2,
+            guard parts.count >= 2,
                   let x = Double(parts[0]), let y = Double(parts[1]) else { return nil }
-            return CGPoint(x: x, y: y)
+            let t: Int
+            if parts.count >= 3, let parsed = Int(parts[2]) {
+                t = max(0, parsed)
+            } else {
+                t = DragWaypoint.legacyTMs
+            }
+            return DragWaypoint(point: CGPoint(x: x, y: y), tMs: t)
         }
     }
 
+    /// Position-only view of the recorded path. Used by UI summaries and
+    /// the legacy bezier playback path that doesn't care about timing.
+    var dragWaypoints: [CGPoint] {
+        dragWaypointsTimed.map { $0.point }
+    }
+
+    /// Persist a position-only path (no timing). Triggers legacy synthetic
+    /// playback. Callers that have timing should use `setDragWaypointsTimed`.
     func setDragWaypoints(_ points: [CGPoint]) {
         let encoded = points.map { "\(Int($0.x)),\(Int($0.y))" }
             .joined(separator: ";")
+        text.onNext(encoded)
+    }
+
+    /// Persist a timed path so playback can reproduce the user's pace.
+    /// Each entry's `tMs` is the millisecond offset since drag start.
+    func setDragWaypointsTimed(_ waypoints: [DragWaypoint]) {
+        let encoded = waypoints.map {
+            "\(Int($0.point.x)),\(Int($0.point.y)),\(max(0, $0.tMs))"
+        }.joined(separator: ";")
         text.onNext(encoded)
     }
 }

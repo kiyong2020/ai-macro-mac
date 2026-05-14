@@ -8,6 +8,9 @@ target 'AIMacro' do
   # Type-safe Swift wrapper around SQLite. Used by ActionStore for per-action
   # state (replaces UserDefaults for AutoAction.save/restore).
   pod 'SQLite.swift', '~> 0.15'
+  # HTTP client for the `.aiGen` action (calls ai-macro-api's
+  # /generate-actions). JSON request with base64 image, JSON response.
+  pod 'Alamofire', '~> 5.10'
 end
 
 # Force every pod target to match the host's macOS 12 deployment target.

@@ -152,8 +152,9 @@ final class AutomationRunner {
         // Optional human-like jitter on top of the configured delay.
         let maxExtra = max(0, Preferences.maxRandomDelay)
         let extraMs = maxExtra > 0 ? Int(Double.random(in: 0...maxExtra) * 1000) : 0
-        if baseMs + extraMs > 0 {
-            try await Task.sleep(for: .milliseconds(baseMs + extraMs))
+        let totalMs = baseMs + extraMs
+        if totalMs > 0 {
+            try await Task.sleep(for: .milliseconds(totalMs))
         }
         switch action.type {
         case .click:                   try await runClick(action)
@@ -168,7 +169,127 @@ final class AutomationRunner {
         case .drag:                    try await runDrag(action)
         case .windowFrame:             try await runWindowFrame(action)
         case .nextScenario:            runNextScenario(action)
+        case .aiGen:                   try await runAIGen(action)
         }
+    }
+
+    /// `.aiGen`: capture the configured region, POST it to ai-macro-api,
+    /// then execute the returned actions in-place. Coordinates from the
+    /// server are image-local (top-left origin), so we translate them to
+    /// Quartz screen-space by adding the capture region's origin before
+    /// running each action. Generated actions are consumed once and are
+    /// NOT written back to the scenario.
+    private func runAIGen(_ action: AutoAction) async throws {
+        let instruction = ((try? action.text.value()) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instruction.isEmpty else {
+            AppLogger.shared.log("⚠️ AI 액션 — 지시문이 비어있음")
+            return
+        }
+        let center = (try? action.point.value()) ?? .zero
+        let size = action.ocrScanSize
+        guard size.width > 0, size.height > 0 else {
+            AppLogger.shared.log("⚠️ AI 액션 — 캡처 영역 크기 미설정")
+            return
+        }
+        // Quartz coords (Y-down). action.point is the center; convert to
+        // the top-left origin a CGWindowListCreateImage rect expects.
+        let captureRect = CGRect(x: center.x - size.width / 2,
+                                 y: center.y - size.height / 2,
+                                 width: size.width,
+                                 height: size.height)
+        guard let cg = CGWindowListCreateImage(captureRect,
+                                               .optionOnScreenOnly,
+                                               kCGNullWindowID,
+                                               .nominalResolution) else {
+            AppLogger.shared.log("⚠️ AI 액션 — 화면 캡처 실패")
+            return
+        }
+        let img = NSImage(cgImage: cg,
+                          size: NSSize(width: cg.width, height: cg.height))
+
+        // The default delay seeded into each generated action. The
+        // existing `Preferences.defaultActionDelay` is the closest
+        // user-tuned baseline; fall back to 0.1s.
+        let baseDelay = max(0.05, Preferences.defaultActionDelay)
+        AppLogger.shared.log("🤖 AI 액션 호출 중… (지시문: \(instruction.prefix(40))…)")
+
+        let rawActions: [[String: Any]]
+        do {
+            rawActions = try await ActionGenService.shared.generate(
+                image: img,
+                instruction: instruction,
+                defaultDelay: baseDelay
+            )
+        } catch {
+            AppLogger.shared.log("⚠️ AI 액션 — 서버 호출 실패: \(error.localizedDescription)")
+            throw error
+        }
+        if rawActions.isEmpty {
+            AppLogger.shared.log("⚠️ AI 액션 — 생성된 액션이 없음")
+            return
+        }
+
+        // Coordinate translation: server returns image-local pixels with
+        // the image's pixelSize matching what we sent (the CGImage above).
+        // Both axes scale identically since CGWindowListCreateImage with
+        // `.nominalResolution` gives us point-equal pixels on non-Retina
+        // sources but a 2× backing on Retina. Use the actual CG pixel
+        // dimensions vs. our requested rect to derive the scale.
+        let pixelW = Double(cg.width)
+        let pixelH = Double(cg.height)
+        let scaleX = pixelW > 0 ? Double(captureRect.width) / pixelW : 1
+        let scaleY = pixelH > 0 ? Double(captureRect.height) / pixelH : 1
+        let originX = Double(captureRect.minX)
+        let originY = Double(captureRect.minY)
+
+        var generated: [AutoAction] = []
+        for raw in rawActions {
+            guard let sub = AutoAction.fromFullJSON(raw) else {
+                AppLogger.shared.log("⚠️ AI 액션 — 디코딩 실패한 항목 건너뜀")
+                continue
+            }
+            // Translate point from image-local pixels → Quartz screen
+            // coords. Skip for action kinds that don't carry a meaningful
+            // point (key / scroll).
+            switch sub.type {
+            case .key, .scroll:
+                break
+            default:
+                let p = (try? sub.point.value()) ?? .zero
+                let translated = CGPoint(
+                    x: originX + Double(p.x) * scaleX,
+                    y: originY + Double(p.y) * scaleY
+                )
+                sub.point.onNext(translated)
+                // Drag waypoints carry their own coords in `text`; rewrite
+                // them through the same transform.
+                if case .drag = sub.type {
+                    let waypoints = sub.dragWaypointsTimed.map { wp in
+                        DragWaypoint(
+                            point: CGPoint(
+                                x: originX + Double(wp.point.x) * scaleX,
+                                y: originY + Double(wp.point.y) * scaleY
+                            ),
+                            tMs: wp.tMs
+                        )
+                    }
+                    sub.setDragWaypointsTimed(waypoints)
+                }
+            }
+            generated.append(sub)
+        }
+
+        AppLogger.shared.log("🤖 AI 액션 \(generated.count)개 실행 시작")
+        for (i, gen) in generated.enumerated() {
+            AppLogger.shared.log("   [\(i + 1)/\(generated.count)] \(gen.name)")
+            do {
+                try await run(gen)
+            } catch {
+                AppLogger.shared.log("⚠️ AI 생성 액션 '\(gen.name)' 실패: \(error.localizedDescription)")
+            }
+        }
+        AppLogger.shared.log("🤖 AI 액션 완료")
     }
 
     // MARK: - Per-action handlers
@@ -207,7 +328,7 @@ final class AutomationRunner {
     private func runDrag(_ action: AutoAction) async throws {
         let count = try! action.count.value()
         let start = try! action.point.value()
-        let waypoints = action.dragWaypoints
+        let waypoints = action.dragWaypointsTimed
         for i in 0 ..< count {
             await dragMove(start: start, waypoints: waypoints)
             if i < count - 1 {
@@ -222,8 +343,9 @@ final class AutomationRunner {
         // "느린 간격" widens the gap between ticks so flick-detecting
         // receivers (Android Emulator's Qt views, etc.) don't synthesise
         // momentum scrolling on top of our discrete ticks. Default is the
-        // legacy 100 ms — only opt-in users pay the latency.
-        let interTickMs = cfg.slow ? 300 : 100
+        // legacy 100 ms — only opt-in users pay the latency, and they can
+        // tune the exact delay via `cfg.slowDelayMs`.
+        let interTickMs = cfg.slow ? cfg.slowDelayMs : 100
         for i in 0 ..< count {
             scrollWheel(direction: cfg.direction)
             if i < count - 1 {
@@ -309,20 +431,18 @@ final class AutomationRunner {
         let text = try! action.text.value()
         let center = try! action.point.value()  // Quartz coords (Y-down)
         let primaryH = NSScreen.main?.frame.height ?? 0
-        // Per-action scan size — repurposes the unused `count` field for OCR.
-        // 0 means "default" (Constants.ocrCaptureSize, 200pt).
-        let storedSize = (try? action.count.value()) ?? 0
-        let captureSize: CGFloat = storedSize > 0
-            ? CGFloat(storedSize)
-            : Constants.ocrCaptureSize
-        let half = captureSize / 2
+        // Per-action scan size (width × height) packed into `count`. See
+        // AutoAction.ocrScanSize for the encoding.
+        let scanSize = action.ocrScanSize
+        let halfW = scanSize.width / 2
+        let halfH = scanSize.height / 2
 
         // Capture rect centered on action.point, in NSScreen coords (Y-up)
         let captureRectNS = CGRect(
-            x: center.x - half,
-            y: (primaryH - center.y) - half,
-            width: captureSize,
-            height: captureSize
+            x: center.x - halfW,
+            y: (primaryH - center.y) - halfH,
+            width: scanSize.width,
+            height: scanSize.height
         )
 
         var done = false

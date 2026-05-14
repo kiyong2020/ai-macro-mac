@@ -223,18 +223,15 @@ final class ActionDetailBuilder {
 
         case .ocr:
             let card = makeCard(title: L("OCR Search"))
-            card.addRow(label: L("Target Position"),
-                        control: makeOCRPointPicker(action, disposeBag: disposeBag),
-                        hint: "클릭하면 라이브 OCR 미리보기가 마우스를 따라 움직입니다")
             card.addRow(label: L("Search Text"),
-                        control: makeTextField(action, disposeBag: disposeBag, placeholder: "예: 09:00"),
+                        control: makeTextField(action, disposeBag: disposeBag, placeholder: "구매"),
                         hint: "캡처 영역에서 이 텍스트를 인식하면 클릭")
             card.addRow(label: L("Scan Area"),
-                        control: makeScanSizeControl(action, disposeBag: disposeBag),
-                        hint: "타겟 좌표를 중심으로 한 정사각형 캡처 영역 (50–600 px)")
+                        control: makeOCRAreaPicker(action, disposeBag: disposeBag),
+                        hint: "화면에서 직접 드래그하여 OCR 영역의 위치와 크기를 한 번에 지정")
             card.addRow(label: L("Preview"),
                         control: makeActionSnapshotView(action, disposeBag: disposeBag),
-                        hint: "위치 지정 직후 캡처된 스캔 영역")
+                        hint: "영역 지정 직후 캡처된 스캔 영역")
             cards.append(card)
 
         case .script:
@@ -297,6 +294,20 @@ final class ActionDetailBuilder {
                         control: makeNextScenarioPopup(action, disposeBag: disposeBag),
                         hint: L("Stops the current flow and starts the next one in the list."))
             cards.append(card)
+
+        case .aiGen:
+            let card = makeCard(title: L("AI Generate"))
+            card.addRow(label: L("Instruction"),
+                        control: makeMultilineTextField(action, disposeBag: disposeBag,
+                                                        placeholder: "예: 로그인 버튼을 클릭"),
+                        hint: "캡처 영역에 대해 무엇을 할지 자연어로 적어주세요. 서버가 동작을 자동 생성합니다.")
+            card.addRow(label: L("Scan Area"),
+                        control: makeOCRAreaPicker(action, disposeBag: disposeBag),
+                        hint: "AI 가 분석할 화면 영역을 드래그로 지정")
+            card.addRow(label: L("Preview"),
+                        control: makeActionSnapshotView(action, disposeBag: disposeBag),
+                        hint: "영역 지정 직후 캡처된 스캔 영역")
+            cards.append(card)
         }
 
         return cards
@@ -325,6 +336,10 @@ final class ActionDetailBuilder {
         field.bezelStyle = .roundedBezel
         field.delegate = TextFieldChangeDelegate.attach(to: field) { [weak self, weak action] new in
             action?.name = new
+            // name isn't a BehaviorSubject so the throttled save in
+            // loadCurrentScenario doesn't pick it up — persist now or
+            // restore() will revert this rename to the stale SQLite value.
+            action?.save()
             self?.onActionRenamed?()
         }
         field.translatesAutoresizingMaskIntoConstraints = false
@@ -445,33 +460,66 @@ final class ActionDetailBuilder {
 
     private static var scrollDirectionBridgeAssocKey: UInt8 = 0
 
-    /// Single checkbox that flips `ScrollConfig.slow`. The runner widens the
-    /// inter-tick gap when this is on, which avoids momentum/inertia being
-    /// synthesised on top of our discrete ticks by flick-detecting receivers
-    /// (Android Emulator's Qt widgets being the motivating case).
+    /// "Slow interval" checkbox + a numeric ms field that's enabled only
+    /// while the checkbox is on. The checkbox flips `ScrollConfig.slow`
+    /// (widening the inter-tick gap so flick-detecting receivers like
+    /// Android Emulator's Qt widgets don't synthesise momentum), and the
+    /// field lets the user tune the exact step delay used by the runner.
     private func makeScrollSlowControl(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
         let checkbox = NSButton(checkboxWithTitle: L("Slow interval"),
                                 target: nil, action: nil)
         checkbox.state = action.scrollConfig.slow ? .on : .off
         checkbox.translatesAutoresizingMaskIntoConstraints = false
 
-        let bridge = ScrollSlowBridge(action: action, checkbox: checkbox)
+        let delayField = NSTextField(string: "\(action.scrollConfig.slowDelayMs)")
+        delayField.bezelStyle = .roundedBezel
+        delayField.translatesAutoresizingMaskIntoConstraints = false
+        delayField.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        delayField.isEnabled = action.scrollConfig.slow
+        delayField.delegate = TextFieldChangeDelegate.attach(to: delayField) { [weak action] new in
+            let parsed = Int(new) ?? ScrollConfig.defaultSlowDelayMs
+            action?.setScrollSlowDelay(parsed)
+        }
+
+        let unit = NSTextField(labelWithString: "ms")
+        unit.font = .systemFont(ofSize: 11)
+        unit.textColor = .tertiaryLabelColor
+
+        let bridge = ScrollSlowBridge(action: action,
+                                      checkbox: checkbox,
+                                      delayField: delayField)
         checkbox.target = bridge
         checkbox.action = #selector(ScrollSlowBridge.toggled)
         objc_setAssociatedObject(checkbox, &Self.scrollSlowBridgeAssocKey,
                                  bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 
-        // Keep the checkbox in sync when text changes from elsewhere
+        // Keep the checkbox + field in sync when text changes from elsewhere
         // (e.g. scroll recorder rewriting the direction).
         action.text
             .observe(on: MainScheduler.instance)
-            .subscribe(onNext: { [weak checkbox, weak action] _ in
-                guard let checkbox = checkbox, let action = action else { return }
-                let desired: NSControl.StateValue = action.scrollConfig.slow ? .on : .off
-                if checkbox.state != desired { checkbox.state = desired }
+            .subscribe(onNext: { [weak checkbox, weak delayField, weak action] _ in
+                guard let action = action else { return }
+                let cfg = action.scrollConfig
+                if let checkbox = checkbox {
+                    let desired: NSControl.StateValue = cfg.slow ? .on : .off
+                    if checkbox.state != desired { checkbox.state = desired }
+                }
+                if let field = delayField {
+                    field.isEnabled = cfg.slow
+                    // Don't yank characters out from under the user mid-type.
+                    if field.currentEditor() == nil {
+                        let s = "\(cfg.slowDelayMs)"
+                        if field.stringValue != s { field.stringValue = s }
+                    }
+                }
             })
             .disposed(by: disposeBag)
-        return checkbox
+
+        let row = NSStackView(views: [checkbox, delayField, unit])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 6
+        return row
     }
 
     private static var scrollSlowBridgeAssocKey: UInt8 = 0
@@ -507,7 +555,20 @@ final class ActionDetailBuilder {
         objc_setAssociatedObject(sender, &Self.scrollRecorderAssocKey,
                                  recorder, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 
+        let esc = EscCancelMonitor()
+        esc.onCancel = { [weak recorder, weak sender] in
+            recorder?.cancel()
+            if let sender = sender {
+                Self.armPickerVisuals(button: sender, display: nil, active: false, pushCursor: false)
+                objc_setAssociatedObject(sender, &Self.scrollRecorderAssocKey,
+                                         nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            }
+            DispatchQueue.main.async { ScanPreviewPanel.shared.hide() }
+            AppLogger.shared.log("⎋ 스크롤 녹화 취소")
+        }
+
         recorder.onEnd = { [weak action, weak sender] dy, dx in
+            esc.stop()
             // Pick the dominant axis. Sign convention matches the playback
             // helper: negative wheel1 = `.down`, positive = `.up`; negative
             // wheel2 = `.right`, positive = `.left`.
@@ -546,6 +607,7 @@ final class ActionDetailBuilder {
             AppLogger.shared.log("🌀 스크롤 녹화: \(direction.rawValue) \(ticks)틱")
         }
         recorder.start()
+        esc.start()
     }
 
     private static var scrollRecorderAssocKey: UInt8 = 0
@@ -619,6 +681,58 @@ final class ActionDetailBuilder {
         }
         return field
     }
+
+    /// Scrollable, multi-line text editor that mirrors `action.text`. Used
+    /// for free-form natural-language fields (`.aiGen` instruction).
+    private func makeMultilineTextField(_ action: AutoAction,
+                                        disposeBag: DisposeBag,
+                                        placeholder: String) -> NSView {
+        let scroll = NSScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        scroll.heightAnchor.constraint(equalToConstant: 88).isActive = true
+
+        let textView = NSTextView()
+        textView.font = .systemFont(ofSize: 13)
+        textView.isRichText = false
+        textView.isEditable = true
+        textView.allowsUndo = true
+        textView.string = (try? action.text.value()) ?? ""
+        textView.autoresizingMask = [.width]
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = true
+
+        let bridge = TextViewChangeBridge { [weak action] new in
+            action?.text.onNext(new)
+        }
+        textView.delegate = bridge
+        objc_setAssociatedObject(scroll, &Self.textViewBridgeAssocKey,
+                                 bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        // Lightweight placeholder via overlay label — NSTextView lacks a
+        // built-in `placeholderString` (unlike NSTextField).
+        let placeholderLabel = NSTextField(labelWithString: placeholder)
+        placeholderLabel.textColor = .placeholderTextColor
+        placeholderLabel.font = .systemFont(ofSize: 13)
+        placeholderLabel.isHidden = !textView.string.isEmpty
+        placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
+        bridge.onChange = { [weak action, weak placeholderLabel] new in
+            action?.text.onNext(new)
+            placeholderLabel?.isHidden = !new.isEmpty
+        }
+
+        scroll.documentView = textView
+        scroll.addSubview(placeholderLabel)
+        NSLayoutConstraint.activate([
+            placeholderLabel.leadingAnchor.constraint(equalTo: scroll.leadingAnchor, constant: 6),
+            placeholderLabel.topAnchor.constraint(equalTo: scroll.topAnchor, constant: 4),
+        ])
+        return scroll
+    }
+
+    private static var textViewBridgeAssocKey: UInt8 = 0
 
     /// Initialize a `.openBrowser` action's `text` so subsequent UI bindings
     /// have something concrete to render. Pre-fills the URL slot from the
@@ -751,16 +865,27 @@ final class ActionDetailBuilder {
         let captureSession = PickerCaptureSession(size: size)
         captureSession.start()
 
-        mouseListener.consumesAllClicks = true
-        mouseListener.onMouseDown = { [weak self] (point, _) in
+        let esc = EscCancelMonitor()
+        let teardown: () -> Void = { [weak self] in
             guard let self = self else { return }
             self.mouseListener.stop()
             self.mouseListener.consumesAllClicks = false
             Self.armPickerVisuals(button: sender, display: nil, active: false, pushCursor: false)
+            DispatchQueue.main.async { ScanPreviewPanel.shared.hide() }
+        }
+        esc.onCancel = {
+            _ = captureSession.stop()
+            teardown()
+            AppLogger.shared.log("⎋ 위치 선택 취소")
+        }
+
+        mouseListener.consumesAllClicks = true
+        mouseListener.onMouseDown = { (point, _) in
+            esc.stop()
             if let img = captureSession.stop() {
                 OCRSnapshotStore.shared.save(img, actionId: action.id)
             }
-            DispatchQueue.main.async { ScanPreviewPanel.shared.hide() }
+            teardown()
 
             // `point` is in Quartz screen coords (Y-down) — same coord
             // system AX uses for window position, so the saved origin maps
@@ -772,6 +897,7 @@ final class ActionDetailBuilder {
             AppLogger.shared.log("🪟 위치 선택: \(WindowFrameUtil.encode(newFrame))")
         }
         mouseListener.start()
+        esc.start()
     }
 
     /// URL field for `.openBrowser` — reads/writes only the URL half of the
@@ -955,51 +1081,6 @@ final class ActionDetailBuilder {
         return container
     }
 
-    /// Slider + number field pair for the OCR scan area size. Both stay in
-    /// sync; values clamp to 50…600 px in 25 px steps. Persists to
-    /// `action.count` (0 means "default 200").
-    private func makeScanSizeControl(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
-        let stored = (try? action.count.value()) ?? 0
-        let initial = stored > 0 ? stored : Int(Constants.ocrCaptureSize)
-
-        let slider = NSSlider(value: Double(initial),
-                              minValue: 50,
-                              maxValue: 600,
-                              target: nil,
-                              action: nil)
-        slider.numberOfTickMarks = (600 - 50) / 25 + 1
-        slider.allowsTickMarkValuesOnly = true
-        slider.translatesAutoresizingMaskIntoConstraints = false
-        slider.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
-
-        let field = NSTextField(string: "\(initial)")
-        field.alignment = .right
-        field.bezelStyle = .roundedBezel
-        field.translatesAutoresizingMaskIntoConstraints = false
-        field.widthAnchor.constraint(equalToConstant: 60).isActive = true
-
-        let unit = NSTextField(labelWithString: "px")
-        unit.font = .systemFont(ofSize: 11)
-        unit.textColor = .tertiaryLabelColor
-
-        let state = ScanSizeState(action: action, slider: slider, field: field)
-        slider.target = state
-        slider.action = #selector(ScanSizeState.sliderChanged)
-        field.delegate = TextFieldChangeDelegate.attach(to: field) { [weak state] _ in
-            state?.fieldChanged()
-        }
-        objc_setAssociatedObject(field, &Self.scanSizeStateAssocKey,
-                                 state, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-
-        let row = NSStackView(views: [slider, field, unit])
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 8
-        return row
-    }
-
-    private static var scanSizeStateAssocKey: UInt8 = 0
-
     /// Returns the mode dropdown (intended for the row's label slot) and the
     /// recorder/text-field stack (the row's control). Splitting them lets
     /// the caller wire the popup directly into `addRow(labelView:…)` instead
@@ -1059,42 +1140,25 @@ final class ActionDetailBuilder {
 
     private static var customKeyStateAssocKey: UInt8 = 0
 
-    /// Variant of `makePointPicker` for the OCR action — its pick button
-    /// shows the floating ScanPreviewPanel + OCRDebugWindow with a live OCR
-    /// stream that follows the cursor, so the user can verify the target
-    /// text is recognized before committing the position.
-    private func makeOCRPointPicker(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
-        let display = NSTextField(labelWithString: "")
-        display.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        display.textColor = .labelColor
-        display.wantsLayer = true
-        display.layer?.borderWidth = 1
-        display.layer?.borderColor = NSColor.separatorColor.cgColor
-        display.layer?.cornerRadius = 6
-        display.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
-        display.cell?.usesSingleLineMode = true
-        display.translatesAutoresizingMaskIntoConstraints = false
-        display.heightAnchor.constraint(equalToConstant: 22).isActive = true
+    /// Button that launches a macOS-Screenshot-style drag-to-select overlay
+    /// for the OCR action. The drag rectangle sets both `action.point`
+    /// (center of the rect, in Quartz coords) and the packed width/height in
+    /// `action.count` in a single gesture.
+    private func makeOCRAreaPicker(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
+        let dragButton = NSButton(title: L("🔲 Drag to Select Area"),
+                                  target: self,
+                                  action: #selector(pickOCRArea(_:)))
+        dragButton.bezelStyle = .roundRect
+        dragButton.controlSize = .small
+        objc_setAssociatedObject(dragButton, &Self.actionAssocKey,
+                                 action, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 
-        action.point
-            .observe(on: MainScheduler.instance)
-            .subscribe(onNext: { p in
-                display.stringValue = (p == .zero ? "  " + L("(Not set)") : "  \(Int(p.x)), \(Int(p.y))")
-            })
-            .disposed(by: disposeBag)
-
-        let pickButton = NSButton(title: L("📍 Pick Position"), target: self,
-                                  action: #selector(pickOCRPoint(_:)))
-        pickButton.bezelStyle = .roundRect
-        pickButton.controlSize = .small
-        objc_setAssociatedObject(pickButton, &Self.actionAssocKey, action, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-        objc_setAssociatedObject(pickButton, &Self.displayAssocKey, display, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-
-        let row = NSStackView(views: [display, pickButton])
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let row = NSStackView(views: [dragButton, spacer])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 8
-        display.setContentHuggingPriority(.defaultLow, for: .horizontal)
         return row
     }
 
@@ -1208,7 +1272,7 @@ final class ActionDetailBuilder {
         Self.armPickerVisuals(button: sender, display: nil, active: true, pushCursor: false)
         ScanPreviewPanel.shared.show(rectSize: CGSize(width: 40, height: 40))
 
-        var samples: [CGPoint] = []
+        var samples: [DragWaypoint] = []
         var startPoint: CGPoint = .zero
         let recorder = MouseDragRecorder()
         // Anchor the recorder to the button so it survives past this
@@ -1219,26 +1283,8 @@ final class ActionDetailBuilder {
         objc_setAssociatedObject(sender, &Self.dragRecorderAssocKey,
                                  recorder, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 
-        recorder.onStart = { [weak action] point in
-            startPoint = point
-            action?.point.onNext(point)
-            samples.removeAll()
-            AppLogger.shared.log("✋ 드래그 녹화 시작: (\(Int(point.x)), \(Int(point.y)))")
-        }
-        recorder.onSample = { point in
-            samples.append(point)
-        }
-        recorder.onEnd = { [weak action, weak sender] point in
-            samples.append(point)
-            action?.setDragWaypoints(samples)
-            // One-shot screenshot of the area covering start + waypoints,
-            // overlaid with start/end markers. Replaces the start-point-only
-            // live capture so long drags show both endpoints in context.
-            if let id = action?.id,
-               let img = ActionDetailBuilder.makeDragSnapshot(start: startPoint,
-                                                              waypoints: samples) {
-                OCRSnapshotStore.shared.save(img, actionId: id)
-            }
+        let esc = EscCancelMonitor()
+        let teardown: () -> Void = { [weak sender] in
             if let sender = sender {
                 Self.armPickerVisuals(button: sender, display: nil, active: false, pushCursor: false)
                 // Release the recorder anchor so the tap is torn down by
@@ -1247,9 +1293,39 @@ final class ActionDetailBuilder {
                                          nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
             }
             DispatchQueue.main.async { ScanPreviewPanel.shared.hide() }
-            AppLogger.shared.log("✋ 드래그 녹화 완료: 경로점 \(samples.count)개 (끝 \(Int(point.x)), \(Int(point.y)))")
+        }
+        esc.onCancel = { [weak recorder] in
+            recorder?.stop()
+            teardown()
+            AppLogger.shared.log("⎋ 드래그 녹화 취소")
+        }
+
+        recorder.onStart = { [weak action] point in
+            startPoint = point
+            action?.point.onNext(point)
+            samples.removeAll()
+            AppLogger.shared.log("✋ 드래그 녹화 시작: (\(Int(point.x)), \(Int(point.y)))")
+        }
+        recorder.onSample = { point, tMs in
+            samples.append(DragWaypoint(point: point, tMs: tMs))
+        }
+        recorder.onEnd = { [weak action] point, tMs in
+            esc.stop()
+            samples.append(DragWaypoint(point: point, tMs: tMs))
+            action?.setDragWaypointsTimed(samples)
+            // One-shot screenshot of the area covering start + waypoints,
+            // overlaid with start/end markers. Replaces the start-point-only
+            // live capture so long drags show both endpoints in context.
+            if let id = action?.id,
+               let img = ActionDetailBuilder.makeDragSnapshot(start: startPoint,
+                                                              waypoints: samples.map { $0.point }) {
+                OCRSnapshotStore.shared.save(img, actionId: id)
+            }
+            teardown()
+            AppLogger.shared.log("✋ 드래그 녹화 완료: 경로점 \(samples.count)개, \(tMs)ms (끝 \(Int(point.x)), \(Int(point.y)))")
         }
         recorder.start()
+        esc.start()
     }
 
     private static var dragRecorderAssocKey: UInt8 = 0
@@ -1388,106 +1464,74 @@ final class ActionDetailBuilder {
     private static var actionAssocKey: UInt8 = 0
     private static var displayAssocKey: UInt8 = 0
 
-    @objc private func pickOCRPoint(_ sender: NSButton) {
-        guard let action = objc_getAssociatedObject(sender, &Self.actionAssocKey) as? AutoAction else { return }
-        let display = objc_getAssociatedObject(sender, &Self.displayAssocKey) as? NSTextField
-        Self.armPickerVisuals(button: sender, display: display, active: true)
+    @objc private func pickOCRArea(_ sender: NSButton) {
+        guard let action = objc_getAssociatedObject(sender, &Self.actionAssocKey)
+                as? AutoAction else { return }
+        // No floating preview panel or cursor push here — the full-screen
+        // overlay handles its own cursor and dimming.
+        Self.armPickerVisuals(button: sender, display: nil,
+                              active: true, pushCursor: false)
 
-        let targetText = (try? action.text.value()) ?? ""
-        // Match the runtime: per-action scan size from action.count
-        // (0 = default 200).
-        let storedSize = (try? action.count.value()) ?? 0
-        let captureSize: CGFloat = storedSize > 0
-            ? CGFloat(storedSize)
-            : Constants.ocrCaptureSize
-        ScanPreviewPanel.shared.show(size: captureSize)
-        OCRDebugWindow.shared.show(target: targetText)
+        let controller = AreaSelectionController()
+        // Anchor to the button so the controller survives until the user
+        // commits or cancels. Cleared in `onFinish` below.
+        objc_setAssociatedObject(sender, &Self.areaSelectorAssocKey,
+                                 controller, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 
-        // Live OCR capture that follows the cursor — same pattern as the
-        // legacy ActionCellFactory.makeOCRCell.onClickPosition.
-        let capturer = ScreenCapturer()
-        capturer.showsCursor = true
-        let half = captureSize / 2
-        func rectAt(_ pt: CGPoint) -> CGRect {
-            CGRect(x: pt.x - half, y: pt.y - half, width: captureSize, height: captureSize)
-        }
+        // Backup ESC handler in case the overlay panel hasn't become key
+        // (e.g. another app holds focus on a fullscreen display).
+        let esc = EscCancelMonitor()
+        esc.onCancel = { [weak controller] in controller?.cancel() }
 
-        // Throttle Vision so a 60fps SCStream doesn't backlog the main thread.
-        var lastProcessAt = Date.distantPast
-        var ocrInFlight = false
-        // Latest image delivered by the live capturer — saved as the
-        // action's snapshot when the user commits the position.
-        var lastImage: NSImage?
-        let liveHandler: (NSImage?) -> Void = { img in
-            if let img = img { lastImage = img }
-            let now = Date()
-            guard now.timeIntervalSince(lastProcessAt) > 0.15, !ocrInFlight else { return }
-            lastProcessAt = now
-            guard let img = img, let cgImg = img.toCGImage() else { return }
-            ocrInFlight = true
-            recognizeText(from: cgImg) { results in
-                OCRDebugWindow.shared.update(image: img, results: results, target: targetText)
-                ocrInFlight = false
+        controller.onFinish = { [weak sender, weak action] quartzRect in
+            esc.stop()
+            // Always reset the button visuals and drop the anchor first so a
+            // cancelled gesture doesn't leave the UI in the "armed" state.
+            if let sender = sender {
+                Self.armPickerVisuals(button: sender, display: nil,
+                                      active: false, pushCursor: false)
+                objc_setAssociatedObject(sender, &Self.areaSelectorAssocKey,
+                                         nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
             }
-        }
-        capturer.handler = liveHandler
-        capturer.start(rect: rectAt(NSEvent.mouseLocation))
+            guard let action = action, let rect = quartzRect else {
+                AppLogger.shared.log("⎋ OCR 영역 선택 취소")
+                return
+            }
+            // Snap dimensions to 25 px to match the slider grid; clamp to the
+            // 50…600 range so the stored size remains valid for both the UI
+            // and the runtime.
+            let snap: (CGFloat) -> Int = { Int(round($0 / 25.0)) * 25 }
+            let w = max(50, min(600, snap(rect.width)))
+            let h = max(50, min(600, snap(rect.height)))
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            action.point.onNext(center)
+            action.setOCRScanSize(width: w, height: h)
 
-        // Restart the stream when the cursor crosses display boundaries.
-        // Compare by displayID rather than NSScreen identity (the latter can
-        // return distinct instances for the same physical display).
-        func displayID(at point: CGPoint) -> CGDirectDisplayID? {
-            let key = NSDeviceDescriptionKey("NSScreenNumber")
-            return NSScreen.screens.first { $0.frame.contains(point) }?
-                .deviceDescription[key] as? CGDirectDisplayID
-        }
-        var lastDisplayID = displayID(at: NSEvent.mouseLocation)
-        var globalMoveMonitor: Any?
-        var localMoveMonitor: Any?
-        let updateForMove: () -> Void = {
-            let pt = NSEvent.mouseLocation
-            let rect = rectAt(pt)
-            let id = displayID(at: pt)
-            if let id = id, id != lastDisplayID {
-                capturer.stop()
-                capturer.handler = liveHandler   // stop() clears it
-                capturer.showsCursor = true
-                capturer.start(rect: rect)
-                lastDisplayID = id
-            } else {
-                capturer.updateCaptureRect(rect)
+            // Capture a snapshot of the final selected area (matching the
+            // pattern in `makeDragSnapshot`). CGWindowListCreateImage is
+            // deprecated but still works for one-shot grabs on the supported
+            // macOS 12 baseline. Run on the next runloop tick so the
+            // overlays have actually been torn down before we capture —
+            // otherwise the dim layer ends up in the screenshot.
+            let snapRect = CGRect(x: center.x - CGFloat(w) / 2,
+                                  y: center.y - CGFloat(h) / 2,
+                                  width: CGFloat(w), height: CGFloat(h))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                if let cg = CGWindowListCreateImage(
+                    snapRect, .optionOnScreenOnly,
+                    kCGNullWindowID, .nominalResolution) {
+                    let img = NSImage(cgImage: cg,
+                                      size: NSSize(width: cg.width, height: cg.height))
+                    OCRSnapshotStore.shared.save(img, actionId: action.id)
+                }
             }
+            AppLogger.shared.log("🔲 OCR 영역 선택: 중심 (\(Int(center.x)), \(Int(center.y))) 크기 \(w)×\(h)")
         }
-        globalMoveMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { _ in
-            DispatchQueue.main.async { updateForMove() }
-        }
-        localMoveMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { event in
-            updateForMove()
-            return event
-        }
-
-        mouseListener.consumesAllClicks = true
-        mouseListener.onMouseDown = { [weak self] (point, _) in
-            guard let self = self else { return }
-            action.point.onNext(point)
-            self.mouseListener.stop()
-            self.mouseListener.consumesAllClicks = false
-            Self.armPickerVisuals(button: sender, display: display, active: false)
-            capturer.stop()
-            if let m = globalMoveMonitor { NSEvent.removeMonitor(m) }
-            if let m = localMoveMonitor { NSEvent.removeMonitor(m) }
-            // Persist the most recent live preview as the action's snapshot
-            // so the OCR card's preview thumbnail reflects what was picked.
-            if let img = lastImage {
-                OCRSnapshotStore.shared.save(img, actionId: action.id)
-            }
-            DispatchQueue.main.async {
-                ScanPreviewPanel.shared.hide()
-                OCRDebugWindow.shared.hide()
-            }
-        }
-        mouseListener.start()
+        controller.start()
+        esc.start()
     }
+
+    private static var areaSelectorAssocKey: UInt8 = 0
 
     @objc private func pickPoint(_ sender: NSButton) {
         guard let action = objc_getAssociatedObject(sender, &Self.actionAssocKey) as? AutoAction else { return }
@@ -1507,19 +1551,31 @@ final class ActionDetailBuilder {
             size: CGSize(width: 200, height: 200))
         captureSession.start()
 
-        mouseListener.consumesAllClicks = true
-        mouseListener.onMouseDown = { [weak self] (point, _) in
+        let esc = EscCancelMonitor()
+        let teardown: () -> Void = { [weak self] in
             guard let self = self else { return }
-            action.point.onNext(point)
             self.mouseListener.stop()
             self.mouseListener.consumesAllClicks = false
             Self.armPickerVisuals(button: sender, display: display, active: false, pushCursor: false)
+            DispatchQueue.main.async { ScanPreviewPanel.shared.hide() }
+        }
+        esc.onCancel = {
+            _ = captureSession.stop()
+            teardown()
+            AppLogger.shared.log("⎋ 좌표 선택 취소")
+        }
+
+        mouseListener.consumesAllClicks = true
+        mouseListener.onMouseDown = { (point, _) in
+            esc.stop()
+            action.point.onNext(point)
             if let img = captureSession.stop() {
                 OCRSnapshotStore.shared.save(img, actionId: action.id)
             }
-            DispatchQueue.main.async { ScanPreviewPanel.shared.hide() }
+            teardown()
         }
         mouseListener.start()
+        esc.start()
     }
 
     @objc private func pickWindow(_ sender: NSButton) {
@@ -1530,15 +1586,26 @@ final class ActionDetailBuilder {
             size: CGSize(width: 200, height: 200))
         captureSession.start()
 
-        mouseListener.consumesAllClicks = true
-        mouseListener.onMouseDown = { [weak self] (point, _) in
+        let esc = EscCancelMonitor()
+        let teardown: () -> Void = { [weak self] in
             guard let self = self else { return }
             self.mouseListener.stop()
             self.mouseListener.consumesAllClicks = false
             Self.armPickerVisuals(button: sender, display: nil, active: false)
+        }
+        esc.onCancel = {
+            _ = captureSession.stop()
+            teardown()
+            AppLogger.shared.log("⎋ 윈도우 선택 취소")
+        }
+
+        mouseListener.consumesAllClicks = true
+        mouseListener.onMouseDown = { (point, _) in
+            esc.stop()
             if let img = captureSession.stop() {
                 OCRSnapshotStore.shared.save(img, actionId: action.id)
             }
+            teardown()
             if let frame = WindowFrameUtil.windowFrame(at: point) {
                 let encoded = WindowFrameUtil.encode(frame)
                 action.setEncodedFrame(encoded)
@@ -1548,6 +1615,7 @@ final class ActionDetailBuilder {
             }
         }
         mouseListener.start()
+        esc.start()
     }
 
     /// Toggle the recording-state visuals on a position-pick button + its
@@ -1555,7 +1623,7 @@ final class ActionDetailBuilder {
     /// display; inactive = system defaults. When `pushCursor` is true (the
     /// default for pickers without their own floating preview), pushes/pops
     /// a custom crosshair cursor for click feedback. Pickers that show their
-    /// own overlay (`pickPoint`, `pickOCRPoint`, `pickBrowserPosition`)
+    /// own overlay (`pickPoint`, `pickOCRArea`, `pickBrowserPosition`)
     /// pass `pushCursor: false` so the system cursor stays visible and the
     /// box marks the target location instead.
     private static func armPickerVisuals(button: NSButton,
@@ -1568,12 +1636,53 @@ final class ActionDetailBuilder {
             display?.layer?.borderColor = NSColor.systemRed.cgColor
             display?.layer?.borderWidth = 2
             if pushCursor { pickerCursor.push() }
+            setMainWindowHidden(true, anchor: button)
         } else {
             button.bezelColor = nil
             button.contentTintColor = nil
             display?.layer?.borderColor = NSColor.separatorColor.cgColor
             display?.layer?.borderWidth = 1
             if pushCursor { NSCursor.pop() }
+            setMainWindowHidden(false, anchor: button)
+        }
+    }
+
+    /// Hides the app's main window while a picker/recorder session is
+    /// active so it doesn't obscure the area the user is about to click
+    /// or drag — and so the picker's snapshot doesn't capture our own
+    /// chrome. Reference-counted so concurrent picker sessions (if any)
+    /// still restore correctly on the last `active: false` call.
+    private static var activePickerSessions = 0
+    private static weak var hiddenPickerWindow: NSWindow?
+
+    static func setMainWindowHidden(_ hidden: Bool, anchor: NSView) {
+        if hidden {
+            activePickerSessions += 1
+            guard activePickerSessions == 1 else { return }
+            let window = anchor.window
+                ?? NSApp.windows.first(where: { $0.contentViewController is ViewController })
+            guard let w = window, w.isVisible else { return }
+            hiddenPickerWindow = w
+            w.orderOut(nil)
+            // orderOut alone keeps us frontmost — the previous app won't
+            // regain focus until we explicitly step aside. `NSApp.deactivate()`
+            // is unreliable while our floating picker panels
+            // (ScanPreviewPanel, OCRDebugWindow) are visible, so we instead
+            // activate the prior frontmost app directly. Those panels are
+            // `.nonactivatingPanel` at .floating+ level so they remain
+            // visible after the activation handoff.
+            if let prev = PreviousAppTracker.shared.previousApp, !prev.isTerminated {
+                prev.activate(options: [])
+            } else {
+                NSApp.deactivate()
+            }
+        } else {
+            guard activePickerSessions > 0 else { return }
+            activePickerSessions -= 1
+            guard activePickerSessions == 0, let w = hiddenPickerWindow else { return }
+            hiddenPickerWindow = nil
+            NSApp.activate(ignoringOtherApps: true)
+            w.makeKeyAndOrderFront(nil)
         }
     }
 
@@ -1691,32 +1800,45 @@ private final class CardView: NSView {
     /// Variant of `addRow` that takes an arbitrary view in place of the
     /// usual text label — used by the .key form so the mode dropdown sits
     /// in the label column.
+    ///
+    /// Every label/control row has the same `[label, control]` shape so the
+    /// row's intrinsic height is determined solely by the control. The
+    /// optional hint becomes its own sibling row indented to align under
+    /// the control — this keeps inter-row spacing identical whether or
+    /// not a row has a hint. A previous design wrapped control + hint in
+    /// a vertical sub-stack, which made the row's intrinsic height vary
+    /// with hint presence and produced intermittent layout glitches as
+    /// NSStackView's measurement raced with constraint resolution.
     func addRow(labelView: NSView, control: NSView, hint: String? = nil) {
         labelView.translatesAutoresizingMaskIntoConstraints = false
         labelView.widthAnchor.constraint(equalToConstant: 100).isActive = true
 
-        var trailing: [NSView] = [control]
-        if let hint = hint, !hint.isEmpty {
-            let h = NSTextField(labelWithString: hint)
-            h.font = .systemFont(ofSize: 11)
-            h.textColor = .tertiaryLabelColor
-            trailing.append(h)
-        }
-        let trailStack = NSStackView(views: trailing)
-        trailStack.orientation = .vertical
-        trailStack.alignment = .leading
-        trailStack.spacing = 4
-        trailStack.translatesAutoresizingMaskIntoConstraints = false
-
-        let row = NSStackView(views: [labelView, trailStack])
+        let row = NSStackView(views: [labelView, control])
         row.orientation = .horizontal
-        row.alignment = .top
+        row.alignment = .firstBaseline
         row.spacing = 14
         row.edgeInsets = NSEdgeInsets(top: 10, left: 0, bottom: 10, right: 0)
         row.translatesAutoresizingMaskIntoConstraints = false
         stack.addArrangedSubview(row)
         row.widthAnchor.constraint(equalTo: stack.widthAnchor,
                                    constant: -stack.edgeInsets.left - stack.edgeInsets.right).isActive = true
+
+        guard let hint = hint, !hint.isEmpty else { return }
+        let hintLabel = NSTextField(labelWithString: hint)
+        hintLabel.font = .systemFont(ofSize: 11)
+        hintLabel.textColor = .tertiaryLabelColor
+        hintLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        // Pulls the hint up under the control by overlapping the previous
+        // row's bottom inset (10pt) — the result is ~4pt visual gap between
+        // control and hint, matching the previous nested-stack spacing.
+        let hintRow = NSStackView(views: [hintLabel])
+        hintRow.orientation = .horizontal
+        hintRow.edgeInsets = NSEdgeInsets(top: -6, left: 114, bottom: 4, right: 0)
+        hintRow.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(hintRow)
+        hintRow.widthAnchor.constraint(equalTo: stack.widthAnchor,
+                                       constant: -stack.edgeInsets.left - stack.edgeInsets.right).isActive = true
     }
 }
 
@@ -1747,6 +1869,7 @@ enum ActionIcons {
         case .openBrowser:  names = ["safari", "globe", "macwindow"]
         case .windowFrame:  names = ["macwindow", "rectangle"]
         case .nextScenario: names = ["arrow.right.circle", "chevron.right.2", "arrow.right"]
+        case .aiGen:        names = ["sparkles", "wand.and.stars", "brain"]
         }
         let label = ActionIcons.label(for: type)
         for name in names {
@@ -1775,6 +1898,7 @@ enum ActionIcons {
         case .openBrowser:          return "🌐🪟"
         case .windowFrame:          return "🪟"
         case .nextScenario:         return "➡️"
+        case .aiGen:                return "🤖"
         }
     }
 
@@ -1794,6 +1918,7 @@ enum ActionIcons {
         case .openBrowser:          return L("Browser")
         case .windowFrame:          return L("Window Frame")
         case .nextScenario:         return L("Next Flow")
+        case .aiGen:                return L("AI Generate")
         }
     }
 }
@@ -2000,41 +2125,49 @@ private final class CustomKeyState: NSObject {
     }
 }
 
-// MARK: - OCR scan-size state
+enum BrowserSizeAxis { case width, height }
 
-/// Keeps the OCR scan-size slider and number field in sync, persisting the
-/// chosen value (in pixels) to `action.count`.
-private final class ScanSizeState: NSObject {
-    private weak var action: AutoAction?
-    private let slider: NSSlider
-    private let field: NSTextField
+/// Lightweight ESC-key watcher for picker / recorder sessions. Fires
+/// `onCancel` once when the user presses ESC anywhere on the system —
+/// or inside the app — then auto-stops. Caller MUST also invalidate via
+/// `stop()` on the success path so the monitors are torn down whether
+/// the session commits or cancels. Global keyDown monitoring piggybacks
+/// on the Accessibility permission this app already holds for its
+/// CGEventTap listeners, so no extra prompt is needed.
+private final class EscCancelMonitor {
+    var onCancel: (() -> Void)?
+    private var globalMonitor: Any?
+    private var localMonitor: Any?
+    private var fired = false
 
-    init(action: AutoAction, slider: NSSlider, field: NSTextField) {
-        self.action = action
-        self.slider = slider
-        self.field = field
-    }
-
-    @objc func sliderChanged() {
-        let v = Int(slider.doubleValue)
-        field.stringValue = "\(v)"
-        action?.count.onNext(v)
-    }
-
-    func fieldChanged() {
-        let raw = Int(field.stringValue) ?? Int(Constants.ocrCaptureSize)
-        let clamped = max(50, min(600, raw))
-        // Snap to nearest 25 to match the slider's tick steps.
-        let snapped = Int(round(Double(clamped) / 25.0)) * 25
-        slider.doubleValue = Double(snapped)
-        if snapped != raw {
-            field.stringValue = "\(snapped)"
+    func start() {
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return }   // kVK_Escape
+            self?.fire()
         }
-        action?.count.onNext(snapped)
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return event }
+            self?.fire()
+            return nil
+        }
+    }
+
+    func stop() {
+        if let m = globalMonitor { NSEvent.removeMonitor(m) }
+        if let m = localMonitor { NSEvent.removeMonitor(m) }
+        globalMonitor = nil
+        localMonitor = nil
+    }
+
+    private func fire() {
+        guard !fired else { return }
+        fired = true
+        stop()
+        let cb = onCancel
+        onCancel = nil
+        DispatchQueue.main.async { cb?() }
     }
 }
-
-enum BrowserSizeAxis { case width, height }
 
 /// Live screen capture that follows the cursor for the duration of a
 /// position-pick session. Used by non-OCR pickers (`pickPoint`,
@@ -2109,6 +2242,238 @@ private final class PickerCaptureSession {
         let key = NSDeviceDescriptionKey("NSScreenNumber")
         return NSScreen.screens.first { $0.frame.contains(point) }?
             .deviceDescription[key] as? CGDirectDisplayID
+    }
+}
+
+// MARK: - Drag-to-select-area (macOS Screenshot-style)
+
+/// Covers every NSScreen with a borderless, non-activating panel so the user
+/// can drag a rectangle that defines both the OCR scan position and size in
+/// one gesture. Mouse-down on any panel starts the selection; subsequent
+/// drags (even across displays) are routed back to the starting panel by
+/// AppKit, so the controller only needs to convert events from that panel's
+/// local space into global NSScreen coordinates. On mouseUp, the final rect
+/// is converted to Quartz coords (Y-down) and handed back via `onFinish` —
+/// nil means cancelled (ESC or zero-size click).
+private final class AreaSelectionController: NSObject {
+    private var panels: [AreaSelectionPanel] = []
+    private var dragStartGlobalNS: CGPoint?
+    private var globalSelectionNS: CGRect = .zero
+    var onFinish: ((CGRect?) -> Void)?  // Quartz rect, or nil = cancelled
+
+    /// Minimum dimension (in points) for the drag to count as a real
+    /// selection — anything smaller is treated as a click and cancels.
+    private let minDragSize: CGFloat = 5
+
+    func start() {
+        for screen in NSScreen.screens {
+            let panel = AreaSelectionPanel(screen: screen)
+            let view = AreaSelectionView(frame: NSRect(origin: .zero, size: screen.frame.size))
+            view.screenOriginGlobalNS = screen.frame.origin
+            view.onMouseDown = { [weak self] localPt in
+                guard let self = self else { return }
+                let global = CGPoint(x: localPt.x + screen.frame.origin.x,
+                                     y: localPt.y + screen.frame.origin.y)
+                self.dragStartGlobalNS = global
+                self.globalSelectionNS = CGRect(origin: global, size: .zero)
+                self.broadcast()
+            }
+            view.onMouseDragged = { [weak self] localPt in
+                guard let self = self, let start = self.dragStartGlobalNS else { return }
+                let global = CGPoint(x: localPt.x + screen.frame.origin.x,
+                                     y: localPt.y + screen.frame.origin.y)
+                self.globalSelectionNS = CGRect(
+                    x: min(start.x, global.x),
+                    y: min(start.y, global.y),
+                    width: abs(global.x - start.x),
+                    height: abs(global.y - start.y))
+                self.broadcast()
+            }
+            view.onMouseUp = { [weak self] _ in self?.commit(cancelled: false) }
+            view.onCancel  = { [weak self]    in self?.commit(cancelled: true) }
+            panel.contentView = view
+            panels.append(panel)
+            panel.orderFrontRegardless()
+            panel.makeFirstResponder(view)
+        }
+        // Make one of the panels key so ESC and the initial click reach a
+        // first responder without requiring the user to click twice.
+        panels.first?.makeKey()
+    }
+
+    /// External cancel — e.g. from an `EscCancelMonitor` set up by the
+    /// caller so ESC still works when the overlay panel hasn't become key
+    /// (which can happen on multi-display setups before the first click).
+    func cancel() { commit(cancelled: true) }
+
+    private func broadcast() {
+        for p in panels {
+            (p.contentView as? AreaSelectionView)?.setGlobalSelectionNS(globalSelectionNS)
+        }
+    }
+
+    private func tearDownPanels() {
+        for p in panels { p.orderOut(nil) }
+        panels.removeAll()
+    }
+
+    private func commit(cancelled: Bool) {
+        let result: CGRect?
+        if cancelled
+            || globalSelectionNS.width < minDragSize
+            || globalSelectionNS.height < minDragSize {
+            result = nil
+        } else {
+            // NSScreen (Y-up, origin at bottom-left of primary) →
+            // Quartz (Y-down, origin at top-left of primary).
+            let primaryH = NSScreen.main?.frame.height ?? globalSelectionNS.maxY
+            result = CGRect(x: globalSelectionNS.minX,
+                            y: primaryH - globalSelectionNS.maxY,
+                            width: globalSelectionNS.width,
+                            height: globalSelectionNS.height)
+        }
+        tearDownPanels()
+        let cb = onFinish
+        onFinish = nil
+        cb?(result)
+    }
+}
+
+/// Borderless `.nonactivatingPanel` filling a single NSScreen. Sits above
+/// every other window so the dimmed overlay + rubber-band rectangle are
+/// rendered on top of the user's desktop. The panel must be able to become
+/// key so it receives ESC and mouse events without activating the app.
+private final class AreaSelectionPanel: NSPanel {
+    init(screen: NSScreen) {
+        super.init(contentRect: screen.frame,
+                   styleMask: [.borderless, .nonactivatingPanel],
+                   backing: .buffered, defer: false)
+        level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.maximumWindow)))
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        isMovable = false
+        isReleasedWhenClosed = false
+        ignoresMouseEvents = false
+        setFrame(screen.frame, display: true)
+    }
+    override var canBecomeKey: Bool  { true }
+    override var canBecomeMain: Bool { false }
+}
+
+/// Renders the dim overlay + yellow rubber-band rectangle and forwards mouse
+/// events back to the controller. Tracks the selection in global NSScreen
+/// coordinates so all panels (in a multi-display setup) draw the same rect.
+private final class AreaSelectionView: NSView {
+    /// Origin of this view's screen in global NSScreen coords. Used to
+    /// translate the controller's global selection into this view's local
+    /// space when drawing.
+    var screenOriginGlobalNS: CGPoint = .zero
+
+    /// Current selection in global NSScreen coords. `.zero` ⇒ no selection
+    /// yet (just dim everything).
+    private var globalSelectionNS: CGRect = .zero
+
+    var onMouseDown: ((CGPoint) -> Void)?
+    var onMouseDragged: ((CGPoint) -> Void)?
+    var onMouseUp: ((CGPoint) -> Void)?
+    var onCancel: (() -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    /// The picker arms by deactivating the app (see
+    /// `armPickerVisuals` → `setMainWindowHidden`). When the overlay panel
+    /// then appears it isn't key, so AppKit's default would swallow the
+    /// first click as a "bring this window to the front" gesture and only
+    /// deliver the *second* click as `mouseDown`. Returning true here
+    /// promotes the very first click into a real `mouseDown` so the user
+    /// can begin dragging without a preliminary click.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    func setGlobalSelectionNS(_ rect: CGRect) {
+        globalSelectionNS = rect
+        needsDisplay = true
+    }
+
+    /// Selection translated into this view's local coords. Returns `.null`
+    /// when nothing is selected so callers can skip rendering the rectangle.
+    private var localSelection: CGRect {
+        if globalSelectionNS == .zero { return .null }
+        return globalSelectionNS.offsetBy(dx: -screenOriginGlobalNS.x,
+                                          dy: -screenOriginGlobalNS.y)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        ctx.clear(bounds)
+
+        let dimColor = NSColor(white: 0, alpha: 0.32).cgColor
+        ctx.setFillColor(dimColor)
+
+        let sel = localSelection
+        if sel.isNull || sel.isEmpty {
+            ctx.fill([bounds])
+            return
+        }
+
+        // Dim everything except the selection (even-odd fill rule).
+        let path = CGMutablePath()
+        path.addRect(bounds)
+        path.addRect(sel)
+        ctx.addPath(path)
+        ctx.fillPath(using: .evenOdd)
+
+        // Yellow border on the selection rectangle.
+        ctx.setStrokeColor(NSColor.systemYellow.cgColor)
+        ctx.setLineWidth(2)
+        ctx.stroke(sel)
+
+        // Dimensions label hovering above the selection (falls back to
+        // below the selection if it would clip off the top of the screen).
+        let label = "\(Int(sel.width)) × \(Int(sel.height))"
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .medium),
+            .foregroundColor: NSColor.white,
+        ]
+        let str = NSAttributedString(string: label, attributes: attrs)
+        let textSize = str.size()
+        let padX: CGFloat = 6
+        let padY: CGFloat = 3
+        let bgW = textSize.width + padX * 2
+        let bgH = textSize.height + padY * 2
+        var bgRect = CGRect(x: sel.minX,
+                            y: sel.maxY + 4,
+                            width: bgW, height: bgH)
+        if bgRect.maxY > bounds.maxY {
+            bgRect.origin.y = max(0, sel.minY - bgH - 4)
+        }
+        ctx.setFillColor(NSColor(white: 0, alpha: 0.75).cgColor)
+        ctx.fill([bgRect])
+        str.draw(at: NSPoint(x: bgRect.minX + padX, y: bgRect.minY + padY))
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .crosshair)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onMouseDown?(convert(event.locationInWindow, from: nil))
+    }
+    override func mouseDragged(with event: NSEvent) {
+        onMouseDragged?(convert(event.locationInWindow, from: nil))
+    }
+    override func mouseUp(with event: NSEvent) {
+        onMouseUp?(convert(event.locationInWindow, from: nil))
+    }
+    override func keyDown(with event: NSEvent) {
+        // kVK_Escape = 53 — matches `EscCancelMonitor`.
+        if event.keyCode == 53 {
+            onCancel?()
+        } else {
+            super.keyDown(with: event)
+        }
     }
 }
 
@@ -2199,18 +2564,24 @@ private final class ScrollDirectionBridge: NSObject {
     }
 }
 
-/// Checkbox shim for the `.scroll` "느린 간격" option.
+/// Checkbox + delay-field shim for the `.scroll` "느린 간격" option.
+/// Toggling the checkbox also enables/disables the field, since the
+/// delay value is only meaningful while `slow == true`.
 private final class ScrollSlowBridge: NSObject {
     private weak var action: AutoAction?
     let checkbox: NSButton
+    weak var delayField: NSTextField?
 
-    init(action: AutoAction, checkbox: NSButton) {
+    init(action: AutoAction, checkbox: NSButton, delayField: NSTextField) {
         self.action = action
         self.checkbox = checkbox
+        self.delayField = delayField
     }
 
     @objc func toggled() {
-        action?.setScrollSlow(checkbox.state == .on)
+        let on = checkbox.state == .on
+        action?.setScrollSlow(on)
+        delayField?.isEnabled = on
     }
 }
 
@@ -2317,5 +2688,18 @@ private final class TextFieldChangeDelegate: NSObject, NSTextFieldDelegate {
         let d = TextFieldChangeDelegate(onChange)
         objc_setAssociatedObject(field, &key, d, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         return d
+    }
+}
+
+/// Mirror of `TextFieldChangeDelegate` for `NSTextView`. Forwards every
+/// edit through `onChange` so the underlying `AutoAction.text` stays in
+/// sync with what the user types in the multiline editor.
+final class TextViewChangeBridge: NSObject, NSTextViewDelegate {
+    var onChange: (String) -> Void
+    init(_ onChange: @escaping (String) -> Void) { self.onChange = onChange }
+
+    func textDidChange(_ note: Notification) {
+        guard let tv = note.object as? NSTextView else { return }
+        onChange(tv.string)
     }
 }
