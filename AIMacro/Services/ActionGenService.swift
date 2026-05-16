@@ -32,6 +32,15 @@ final class ActionGenService {
     /// raw dictionary is fed straight to `AutoAction.fromFullJSON(_:)`.
     typealias GeneratedActionJSON = [String: Any]
 
+    /// One turn of the `.aiGen` loop: a batch of actions plus the model's
+    /// signal of whether the user goal has been fully achieved. The runner
+    /// keeps calling `/generate-actions` (with a fresh screenshot each
+    /// turn) until `finish` is true.
+    struct GenerateResult {
+        let actions: [GeneratedActionJSON]
+        let finish: Bool
+    }
+
     struct GenerateError: LocalizedError {
         let message: String
         var errorDescription: String? { message }
@@ -57,7 +66,7 @@ final class ActionGenService {
                   instruction: String,
                   defaultDelay: Double,
                   scenarios: [ScenarioInfo] = [],
-                  currentScenarioId: String? = nil) async throws -> [GeneratedActionJSON] {
+                  currentScenarioId: String? = nil) async throws -> GenerateResult {
         guard let pngData = pngData(from: image) else {
             throw GenerateError(message: "이미지 인코딩 실패")
         }
@@ -83,6 +92,8 @@ final class ActionGenService {
             body["current_scenario_id"] = cur
         }
 
+        logRequest(url: url, body: body, base64Size: pngData.count)
+
         let response = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[String: Any], Error>) in
             session.request(url,
                             method: .post,
@@ -90,9 +101,10 @@ final class ActionGenService {
                             encoding: JSONEncoding.default,
                             headers: ["Content-Type": "application/json"])
                 .validate()
-                .responseData { resp in
+                .responseData { [weak self] resp in
                     switch resp.result {
                     case .success(let data):
+                        self?.logResponseRaw(data: data, statusCode: resp.response?.statusCode)
                         do {
                             let json = try JSONSerialization.jsonObject(with: data)
                             guard let dict = json as? [String: Any] else {
@@ -104,6 +116,9 @@ final class ActionGenService {
                             cont.resume(throwing: error)
                         }
                     case .failure(let err):
+                        self?.logResponseFailure(error: err,
+                                                 data: resp.data,
+                                                 statusCode: resp.response?.statusCode)
                         let detail: String
                         if let data = resp.data, let s = String(data: data, encoding: .utf8), !s.isEmpty {
                             detail = "\(err.localizedDescription) — \(s)"
@@ -118,13 +133,59 @@ final class ActionGenService {
         guard let rawActions = response["actions"] as? [[String: Any]] else {
             throw GenerateError(message: "응답에 actions 필드 없음")
         }
+        let finish = (response["finish"] as? Bool) ?? false
         if let conf = response["confidence"] as? Double {
-            AppLogger.shared.log("🤖 액션 생성 \(rawActions.count)개 (confidence=\(String(format: "%.2f", conf)))")
+            AppLogger.shared.log("🤖 액션 생성 \(rawActions.count)개 (confidence=\(String(format: "%.2f", conf))\(finish ? ", finish" : ""))")
         }
         if let reason = response["reasoning"] as? String, !reason.isEmpty {
             AppLogger.shared.log("🤖 \(reason)")
         }
-        return rawActions
+        return GenerateResult(actions: rawActions, finish: finish)
+    }
+
+    // MARK: - Verbose request/response logging
+    //
+    // The on-screen log view (AppLogger) only shows the brief status lines
+    // emitted by AutomationRunner / generate(). Full request/response bodies
+    // go to `print` so they land in the Xcode console (Console.app via
+    // ASL/OSLog when running outside a debug session) without flooding the
+    // UI. The base64 image is redacted to its byte size — keeping it in
+    // the log would push ~1–4 MB of text per call.
+
+    private func logRequest(url: String, body: [String: Any], base64Size: Int) {
+        var redacted = body
+        redacted["image"] = "<png \(base64Size) bytes (base64)>"
+        let pretty = prettyJSON(redacted) ?? String(describing: redacted)
+        print("[ActionGen] → POST \(url)\n\(pretty)")
+    }
+
+    private func logResponseRaw(data: Data, statusCode: Int?) {
+        let status = statusCode.map { String($0) } ?? "?"
+        if let s = String(data: data, encoding: .utf8) {
+            let pretty = (try? JSONSerialization.jsonObject(with: data))
+                .flatMap { prettyJSON($0) } ?? s
+            print("[ActionGen] ← \(status) (\(data.count) bytes)\n\(pretty)")
+        } else {
+            print("[ActionGen] ← \(status) (\(data.count) bytes, non-UTF8)")
+        }
+    }
+
+    private func logResponseFailure(error: Error, data: Data?, statusCode: Int?) {
+        let status = statusCode.map { String($0) } ?? "?"
+        var msg = "[ActionGen] ← FAILED status=\(status) error=\(error.localizedDescription)"
+        if let data = data, let s = String(data: data, encoding: .utf8), !s.isEmpty {
+            msg += "\n\(s)"
+        }
+        print(msg)
+    }
+
+    private func prettyJSON(_ value: Any) -> String? {
+        guard JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(
+                withJSONObject: value,
+                options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
+              let s = String(data: data, encoding: .utf8) else { return nil }
+        return s
     }
 
     private func pngData(from image: NSImage) -> Data? {

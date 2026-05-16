@@ -25,10 +25,65 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         wirePreferencesMenu()
         setupGlobalObservers()
         setupStatusItem()
-        attachWindowDelegate()
+        populateAppendActionSubmenu()
+        adoptStoryboardWindow()
+        restoreAdditionalWindowsIfNeeded()
         // Watch app activations so picker sessions know which app to hand
         // focus back to when our window steps aside.
         PreviousAppTracker.shared.start()
+    }
+
+    /// The storyboard auto-instantiates one MainWindowController as the
+    /// initial controller. Register it with the registry so it participates
+    /// in close-tracking + persistence like any window opened later via Cmd+N.
+    /// Falls back to opening a fresh window if the storyboard didn't seed one.
+    private func adoptStoryboardWindow() {
+        DispatchQueue.main.async {
+            for w in NSApp.windows {
+                if let wc = w.windowController as? MainWindowController {
+                    WindowRegistry.shared.register(wc)
+                    wc.window?.makeKeyAndOrderFront(nil)
+                }
+            }
+            if WindowRegistry.shared.windows.isEmpty {
+                self.openNewMainWindow()
+            }
+        }
+    }
+
+    /// Reopen windows the user had open at last quit (beyond the one window
+    /// the storyboard already provides). Each restored entry seeds its own
+    /// scenario selection, frame, and runner number.
+    private func restoreAdditionalWindowsIfNeeded() {
+        let saved = WindowRegistry.savedOpenWindows()
+        guard !saved.isEmpty else { return }
+
+        DispatchQueue.main.async {
+            // Seed the storyboard-provided window with the first entry.
+            // Adopt the saved runner number BEFORE register() runs so the
+            // restored title matches the previous session.
+            if let first = saved.first,
+               let primary = WindowRegistry.shared.windows.first {
+                if let n = first.runnerNumber, n > 0 {
+                    // Already registered with an auto-assigned number —
+                    // re-stamp via the registry so collisions don't slip in.
+                    WindowRegistry.shared.renumber(primary, to: n)
+                }
+                if let vc = primary.contentViewController as? ViewController,
+                   let sid = first.scenarioId {
+                    vc.applyInitialScenarioId(sid)
+                }
+                if let frame = first.frame {
+                    primary.window?.setFrame(frame, display: false)
+                }
+            }
+            // Spawn extras.
+            for entry in saved.dropFirst() {
+                self.openNewMainWindow(scenarioId: entry.scenarioId,
+                                       frame: entry.frame,
+                                       runnerNumber: entry.runnerNumber)
+            }
+        }
     }
 
     // MARK: - Status bar item
@@ -67,8 +122,114 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if isRight {
             showStatusContextMenu()
         } else {
-            toggleMainWindow()
+            showRunnerListMenu()
         }
+    }
+
+    /// Left-click dropdown: lists every open Runner with its current state
+    /// (idle / running / queued) and lets the user jump to any of them.
+    private func showRunnerListMenu() {
+        guard let button = statusItem.button else { return }
+        let menu = buildRunnerListMenu()
+        menu.popUp(positioning: nil,
+                   at: NSPoint(x: 0, y: button.bounds.height + 4),
+                   in: button)
+    }
+
+    private func buildRunnerListMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        // Snapshot the run state once. The menu is transient — closing
+        // and reopening picks up any changes since.
+        let activeId: String? = try? RunCoordinator.shared.activeScenarioId.value()
+        let pending = RunCoordinator.shared.pendingTokens()
+
+        let runners = WindowRegistry.shared.windows
+            .sorted { $0.runnerNumber < $1.runnerNumber }
+        if runners.isEmpty {
+            let none = NSMenuItem(title: "열려있는 Runner 없음",
+                                  action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            menu.addItem(none)
+        } else {
+            for wc in runners {
+                menu.addItem(makeRunnerMenuItem(for: wc,
+                                                activeScenarioId: activeId,
+                                                pending: pending))
+            }
+        }
+
+        menu.addItem(.separator())
+
+        let new = NSMenuItem(title: "New Runner",
+                             action: #selector(newDocument(_:)),
+                             keyEquivalent: "n")
+        new.target = self
+        menu.addItem(new)
+
+        let quit = NSMenuItem(title: "종료",
+                              action: #selector(NSApplication.terminate(_:)),
+                              keyEquivalent: "q")
+        menu.addItem(quit)
+
+        return menu
+    }
+
+    private func makeRunnerMenuItem(for wc: MainWindowController,
+                                    activeScenarioId: String?,
+                                    pending: [RunCoordinator.Token]) -> NSMenuItem {
+        let vc = wc.contentViewController as? ViewController
+        let scenarioId = vc?.currentScenarioIdString()
+        let scenarioName: String = {
+            guard let sid = scenarioId else { return "(시나리오 없음)" }
+            return ScenarioStore.shared.scenarios
+                .first(where: { $0.id.uuidString == sid })?.name ?? "(알 수 없음)"
+        }()
+
+        // Queue tokens are owned by the ViewController, not the WindowController.
+        let queueIdx = pending.firstIndex { $0.owner === (vc as AnyObject?) }
+        let isRunning = scenarioId != nil && scenarioId == activeScenarioId
+            && queueIdx == nil  // running means active, not pending
+
+        let icon: String
+        let suffix: String
+        if isRunning {
+            icon = "▶"; suffix = " (실행 중)"
+        } else if let qi = queueIdx {
+            icon = "⏸"; suffix = " (대기 \(qi + 1)번째)"
+        } else {
+            icon = "•"; suffix = ""
+        }
+
+        let item = NSMenuItem(title: "\(icon) Runner\(wc.runnerNumber) — \(scenarioName)\(suffix)",
+                              action: #selector(focusRunnerWindow(_:)),
+                              keyEquivalent: "")
+        item.target = self
+        item.representedObject = wc
+        return item
+    }
+
+    @objc private func focusRunnerWindow(_ sender: NSMenuItem) {
+        guard let wc = sender.representedObject as? MainWindowController,
+              let window = wc.window else { return }
+        // If the user previously closed this tab and a sibling tab group
+        // is still on screen, rejoin it instead of popping up as a lone
+        // window — keeps the multi-tab layout consistent with what the
+        // user had set up.
+        if !window.isVisible {
+            let anchor = WindowRegistry.shared.windows
+                .compactMap { $0.window }
+                .first(where: { $0 !== window && $0.isVisible })
+            anchor?.addTabbedWindow(window, ordered: .above)
+        }
+        // Already-visible tab inside a group: switch the group's selection
+        // to this specific tab before bringing it forward.
+        if let group = window.tabGroup {
+            group.selectedWindow = window
+        }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func showStatusContextMenu() {
@@ -97,42 +258,74 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showMainWindowFromMenu() {
-        guard let window = mainWindow() else { return }
-        window.makeKeyAndOrderFront(nil)
+        ensureAtLeastOneMainWindow()
+        for wc in WindowRegistry.shared.windows {
+            wc.window?.makeKeyAndOrderFront(nil)
+        }
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    @objc private func toggleMainWindow() {
-        guard let window = mainWindow() else { return }
-        if window.isVisible && window.isKeyWindow {
-            window.orderOut(nil)
-        } else {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+    private func ensureAtLeastOneMainWindow() {
+        if WindowRegistry.shared.windows.isEmpty {
+            openNewMainWindow()
         }
     }
 
-    private func mainWindow() -> NSWindow? {
-        return NSApp.windows.first(where: { $0.contentViewController is ViewController })
+    /// Cmd+N (File → New) — open a fresh main window. Optionally seed its
+    /// scenario selection + frame; both are used during restore-on-launch.
+    @IBAction func newDocument(_ sender: Any?) {
+        openNewMainWindow()
     }
 
-    private func attachWindowDelegate() {
-        // Defer to next runloop tick — the storyboard's main window finishes
-        // wiring after applicationDidFinishLaunching returns.
-        DispatchQueue.main.async { [weak self] in
-            self?.mainWindow()?.delegate = self
-        }
+    @discardableResult
+    func openNewMainWindow(scenarioId: String? = nil,
+                           frame: NSRect? = nil,
+                           runnerNumber: Int? = nil) -> MainWindowController? {
+        guard let storyboard = NSStoryboard.main else { return nil }
+        guard let wc = storyboard.instantiateController(withIdentifier: "MainWindowController")
+                as? MainWindowController else { return nil }
+        wc.pendingScenarioId = scenarioId
+        wc.pendingRunnerNumber = runnerNumber
+        WindowRegistry.shared.register(wc)
+        wc.present(at: frame)
+        return wc
     }
 
     // MARK: - Reopen / close behavior
 
     /// Dock icon click while no window is visible.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag, let window = mainWindow() {
-            window.makeKeyAndOrderFront(nil)
+        if !flag {
+            ensureAtLeastOneMainWindow()
+            for wc in WindowRegistry.shared.windows {
+                wc.window?.makeKeyAndOrderFront(nil)
+            }
             NSApp.activate(ignoringOtherApps: true)
         }
         return true
+    }
+
+    /// Fill the static `File → 새로만들기 → 액션 추가` submenu with the same
+    /// action-type list the sidebar `+` picker shows. Items target First
+    /// Responder so the active window's ViewController handles the append.
+    private func populateAppendActionSubmenu() {
+        guard let main = NSApp.mainMenu,
+              let item = findMenuItem(withTag: 9001, in: main),
+              let submenu = item.submenu else { return }
+        submenu.removeAllItems()
+        for child in ViewController.buildAppendActionSubmenuItems() {
+            submenu.addItem(child)
+        }
+    }
+
+    private func findMenuItem(withTag tag: Int, in menu: NSMenu) -> NSMenuItem? {
+        for item in menu.items {
+            if item.tag == tag { return item }
+            if let sub = item.submenu, let hit = findMenuItem(withTag: tag, in: sub) {
+                return hit
+            }
+        }
+        return nil
     }
 
     private func wirePreferencesMenu() {
@@ -150,7 +343,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ aNotification: Notification) {
-        // Insert code here to tear down your application
+        // Persist before flipping the termination flag — captures the
+        // current open list as the source of truth for next launch.
+        WindowRegistry.shared.persistOpenWindows()
+        // Block subsequent termination-driven `windowWillClose` cascades
+        // from rewriting the list to an empty array on the way out.
+        WindowRegistry.shared.isTerminating = true
     }
     
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
@@ -165,15 +363,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-extension AppDelegate: NSWindowDelegate {
-    /// Intercept the red traffic-light click — hide the window instead of
-    /// tearing it down so we can show it again instantly without rebuilding
-    /// the whole view hierarchy.
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        sender.orderOut(nil)
-        return false
-    }
-}
 
 /// Tracks the most recently active *other* app so picker sessions can
 /// hand focus back when our window steps aside. `NSApp.deactivate()`

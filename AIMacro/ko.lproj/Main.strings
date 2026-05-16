@@ -18,7 +18,16 @@
 "W48-6f-4Dl.title" = "편집";
 
 /* File submenu */
-"Was-JA-tGl.title" = "새로 만들기";
+"Was-JA-tGl.title" = "새로만들기";
+"aim-1n-grp.title" = "새로만들기";
+"aim-1n-flw.title" = "플로우 추가";
+"aim-1n-fSM.title" = "플로우 추가";
+"aim-1n-fEM.title" = "빈 플로우 생성";
+"aim-1n-fDU.title" = "현재 플로우 복제";
+"aim-1n-fRC.title" = "시퀀스로 기록";
+"aim-1n-act.title" = "액션 추가";
+"aim-1n-aSM.title" = "액션 추가";
+"aim-1n-run.title" = "Runner 추가";
 "IAo-SY-fd9.title" = "열기…";
 "tXI-mr-wws.title" = "최근 사용한 항목 열기";
 "oas-Oc-fiZ.title" = "최근 사용한 항목 열기";

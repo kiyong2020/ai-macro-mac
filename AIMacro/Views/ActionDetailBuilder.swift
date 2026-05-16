@@ -298,9 +298,12 @@ final class ActionDetailBuilder {
         case .aiGen:
             let card = makeCard(title: L("AI Generate"))
             card.addRow(label: L("Instruction"),
-                        control: makeMultilineTextField(action, disposeBag: disposeBag,
-                                                        placeholder: "예: 로그인 버튼을 클릭"),
+                        control: makeAIGenInstructionField(action, disposeBag: disposeBag,
+                                                           placeholder: "예: 로그인 버튼을 클릭"),
                         hint: "캡처 영역에 대해 무엇을 할지 자연어로 적어주세요. 서버가 동작을 자동 생성합니다.")
+            card.addRow(label: L("Interval"),
+                        control: makeAIGenIntervalField(action, disposeBag: disposeBag),
+                        hint: "서버 호출 사이 대기 시간 (각 턴마다 화면 캡처 후 액션 실행)")
             card.addRow(label: L("Scan Area"),
                         control: makeOCRAreaPicker(action, disposeBag: disposeBag),
                         hint: "AI 가 분석할 화면 영역을 드래그로 지정")
@@ -730,6 +733,78 @@ final class ActionDetailBuilder {
             placeholderLabel.topAnchor.constraint(equalTo: scroll.topAnchor, constant: 4),
         ])
         return scroll
+    }
+
+    /// Multi-line editor for the `.aiGen` instruction only — strips and
+    /// preserves the encoded `@interval=` header so editing the prose
+    /// doesn't clobber the user's interval setting.
+    private func makeAIGenInstructionField(_ action: AutoAction,
+                                           disposeBag: DisposeBag,
+                                           placeholder: String) -> NSView {
+        let scroll = NSScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        scroll.heightAnchor.constraint(equalToConstant: 88).isActive = true
+
+        let textView = NSTextView()
+        textView.font = .systemFont(ofSize: 13)
+        textView.isRichText = false
+        textView.isEditable = true
+        textView.allowsUndo = true
+        textView.string = action.aiGenInstruction
+        textView.autoresizingMask = [.width]
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = true
+
+        let placeholderLabel = NSTextField(labelWithString: placeholder)
+        placeholderLabel.textColor = .placeholderTextColor
+        placeholderLabel.font = .systemFont(ofSize: 13)
+        placeholderLabel.isHidden = !textView.string.isEmpty
+        placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let bridge = TextViewChangeBridge { [weak action, weak placeholderLabel] new in
+            action?.setAIGenInstruction(new)
+            placeholderLabel?.isHidden = !new.isEmpty
+        }
+        textView.delegate = bridge
+        objc_setAssociatedObject(scroll, &Self.textViewBridgeAssocKey,
+                                 bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        scroll.documentView = textView
+        scroll.addSubview(placeholderLabel)
+        NSLayoutConstraint.activate([
+            placeholderLabel.leadingAnchor.constraint(equalTo: scroll.leadingAnchor, constant: 6),
+            placeholderLabel.topAnchor.constraint(equalTo: scroll.topAnchor, constant: 4),
+        ])
+        return scroll
+    }
+
+    /// Numeric field for the `.aiGen` inter-iteration interval (seconds).
+    /// Mirrors the layout of `makeDelayField`. Writes via
+    /// `setAIGenInterval` so the encoded header is updated without
+    /// touching the instruction body.
+    private func makeAIGenIntervalField(_ action: AutoAction,
+                                        disposeBag: DisposeBag) -> NSView {
+        let field = NSTextField(string: String(format: "%g", action.aiGenInterval))
+        field.bezelStyle = .roundedBezel
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: 110).isActive = true
+        field.delegate = TextFieldChangeDelegate.attach(to: field) { [weak action] new in
+            guard let action = action else { return }
+            let v = Double(new) ?? AIGenPayload.defaultInterval
+            action.setAIGenInterval(v)
+        }
+        let unit = NSTextField(labelWithString: "초")
+        unit.font = .systemFont(ofSize: 11)
+        unit.textColor = .tertiaryLabelColor
+
+        let row = NSStackView(views: [field, unit])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 6
+        return row
     }
 
     private static var textViewBridgeAssocKey: UInt8 = 0
@@ -1647,23 +1722,34 @@ final class ActionDetailBuilder {
         }
     }
 
-    /// Hides the app's main window while a picker/recorder session is
-    /// active so it doesn't obscure the area the user is about to click
-    /// or drag — and so the picker's snapshot doesn't capture our own
-    /// chrome. Reference-counted so concurrent picker sessions (if any)
-    /// still restore correctly on the last `active: false` call.
+    /// Hides every main window while a picker/recorder session is active
+    /// so they don't obscure the area the user is about to click or drag —
+    /// and so the picker's snapshot doesn't capture our own chrome.
+    /// Reference-counted so concurrent picker sessions (if any) still
+    /// restore correctly on the last `active: false` call.
+    ///
+    /// All Runner windows are hidden, not just the anchor's: with native
+    /// window tabbing each tab is its own `NSWindow`, so `orderOut` on one
+    /// would leave the sibling tabs visible.
     private static var activePickerSessions = 0
-    private static weak var hiddenPickerWindow: NSWindow?
+    private static var hiddenPickerWindows: [NSWindow] = []
 
     static func setMainWindowHidden(_ hidden: Bool, anchor: NSView) {
         if hidden {
             activePickerSessions += 1
             guard activePickerSessions == 1 else { return }
-            let window = anchor.window
-                ?? NSApp.windows.first(where: { $0.contentViewController is ViewController })
-            guard let w = window, w.isVisible else { return }
-            hiddenPickerWindow = w
-            w.orderOut(nil)
+            var toHide: [NSWindow] = WindowRegistry.shared.windows.compactMap { wc in
+                guard let w = wc.window, w.isVisible else { return nil }
+                return w
+            }
+            if toHide.isEmpty,
+               let w = anchor.window ?? NSApp.windows.first(where: { $0.contentViewController is ViewController }),
+               w.isVisible {
+                toHide = [w]
+            }
+            guard !toHide.isEmpty else { return }
+            hiddenPickerWindows = toHide
+            for w in toHide { w.orderOut(nil) }
             // orderOut alone keeps us frontmost — the previous app won't
             // regain focus until we explicitly step aside. `NSApp.deactivate()`
             // is unreliable while our floating picker panels
@@ -1679,10 +1765,12 @@ final class ActionDetailBuilder {
         } else {
             guard activePickerSessions > 0 else { return }
             activePickerSessions -= 1
-            guard activePickerSessions == 0, let w = hiddenPickerWindow else { return }
-            hiddenPickerWindow = nil
+            guard activePickerSessions == 0 else { return }
+            let toRestore = hiddenPickerWindows
+            hiddenPickerWindows = []
+            guard !toRestore.isEmpty else { return }
             NSApp.activate(ignoringOtherApps: true)
-            w.makeKeyAndOrderFront(nil)
+            for w in toRestore { w.makeKeyAndOrderFront(nil) }
         }
     }
 
@@ -2432,8 +2520,15 @@ private final class AreaSelectionView: NSView {
         // Dimensions label hovering above the selection (falls back to
         // below the selection if it would clip off the top of the screen).
         let label = "\(Int(sel.width)) × \(Int(sel.height))"
+        // `monospacedSystemFont` is bridged as IUO; embedding it directly in
+        // an `Any` dict literal can leak `Optional.none` into the bridged
+        // NSDictionary and crash `-initWithObjects:forKeys:count:`. Bind
+        // through an optional first and fall back to the regular system font.
+        let labelFont: NSFont =
+            (NSFont.monospacedSystemFont(ofSize: 12, weight: .medium) as NSFont?)
+            ?? NSFont.systemFont(ofSize: 12)
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .medium),
+            .font: labelFont,
             .foregroundColor: NSColor.white,
         ]
         let str = NSAttributedString(string: label, attributes: attrs)

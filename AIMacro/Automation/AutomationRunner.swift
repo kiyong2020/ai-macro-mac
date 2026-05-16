@@ -179,14 +179,22 @@ final class AutomationRunner {
         }
     }
 
-    /// `.aiGen`: capture the configured region, POST it to ai-macro-api,
-    /// then execute the returned actions in-place. Coordinates from the
-    /// server are image-local (top-left origin), so we translate them to
-    /// Quartz screen-space by adding the capture region's origin before
-    /// running each action. Generated actions are consumed once and are
-    /// NOT written back to the scenario.
+    /// Hard cap on the number of `/generate-actions` round-trips a single
+    /// `.aiGen` action will make. Each round-trip is one Claude call plus
+    /// a screenshot, so 20 turns is a meaningful upper bound on a single
+    /// goal — if the model hasn't said `finish` by then the user
+    /// instruction is probably not achievable from the configured region.
+    private static let aiGenMaxIterations = 20
+
+    /// `.aiGen`: loop {capture → POST /generate-actions → execute returned
+    /// actions} until the server says `finish: true` (or the safety cap
+    /// fires). Coordinates from the server are image-local (top-left
+    /// origin); we translate them to Quartz screen-space by adding the
+    /// capture region's origin before running each action. Generated
+    /// actions are consumed each turn and are NOT written back to the
+    /// scenario.
     private func runAIGen(_ action: AutoAction) async throws {
-        let instruction = ((try? action.text.value()) ?? "")
+        let instruction = action.aiGenInstruction
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instruction.isEmpty else {
             AppLogger.shared.log("⚠️ AI 액션 — 지시문이 비어있음")
@@ -204,21 +212,11 @@ final class AutomationRunner {
                                  y: center.y - size.height / 2,
                                  width: size.width,
                                  height: size.height)
-        guard let cg = CGWindowListCreateImage(captureRect,
-                                               .optionOnScreenOnly,
-                                               kCGNullWindowID,
-                                               .nominalResolution) else {
-            AppLogger.shared.log("⚠️ AI 액션 — 화면 캡처 실패")
-            return
-        }
-        let img = NSImage(cgImage: cg,
-                          size: NSSize(width: cg.width, height: cg.height))
 
         // The default delay seeded into each generated action. The
         // existing `Preferences.defaultActionDelay` is the closest
         // user-tuned baseline; fall back to 0.1s.
         let baseDelay = max(0.05, Preferences.defaultActionDelay)
-        AppLogger.shared.log("🤖 AI 액션 호출 중… (지시문: \(instruction.prefix(40))…)")
 
         // Branch options: every scenario in the store. The server filters
         // out the current one (we also tag it via `currentScenarioId`).
@@ -226,28 +224,74 @@ final class AutomationRunner {
             ActionGenService.ScenarioInfo(id: $0.id.uuidString, name: $0.name)
         }
 
-        let rawActions: [[String: Any]]
-        do {
-            rawActions = try await ActionGenService.shared.generate(
-                image: img,
-                instruction: instruction,
-                defaultDelay: baseDelay,
-                scenarios: scenarios,
-                currentScenarioId: currentScenarioId
-            )
-        } catch {
-            AppLogger.shared.log("⚠️ AI 액션 — 서버 호출 실패: \(error.localizedDescription)")
-            throw error
+        let intervalMs = max(0, Int((action.aiGenInterval * 1000.0).rounded()))
+
+        AppLogger.shared.log("🤖 AI 액션 시작 (지시문: \(instruction.prefix(40))…, 간격: \(String(format: "%g", action.aiGenInterval))s)")
+
+        for iteration in 1 ... Self.aiGenMaxIterations {
+            // Capture a fresh screenshot for each turn — the whole point
+            // of the loop is that the model sees the result of the prior
+            // turn's actions before deciding what to do next.
+            guard let cg = CGWindowListCreateImage(captureRect,
+                                                   .optionOnScreenOnly,
+                                                   kCGNullWindowID,
+                                                   .nominalResolution) else {
+                AppLogger.shared.log("⚠️ AI 액션 — 화면 캡처 실패")
+                return
+            }
+            let img = NSImage(cgImage: cg,
+                              size: NSSize(width: cg.width, height: cg.height))
+
+            AppLogger.shared.log("🤖 AI 턴 \(iteration)/\(Self.aiGenMaxIterations) 호출 중…")
+
+            let result: ActionGenService.GenerateResult
+            do {
+                result = try await ActionGenService.shared.generate(
+                    image: img,
+                    instruction: instruction,
+                    defaultDelay: baseDelay,
+                    scenarios: scenarios,
+                    currentScenarioId: currentScenarioId
+                )
+            } catch {
+                AppLogger.shared.log("⚠️ AI 액션 — 서버 호출 실패: \(error.localizedDescription)")
+                throw error
+            }
+
+            try await executeGeneratedBatch(result.actions, captureRect: captureRect, cg: cg)
+
+            if nextScenarioRequest != nil {
+                AppLogger.shared.log("🤖 AI 액션 — 플로우 전환 요청 감지, 루프 종료")
+                return
+            }
+            if result.finish {
+                AppLogger.shared.log("🤖 AI 액션 완료 (finish)")
+                return
+            }
+            if iteration == Self.aiGenMaxIterations {
+                AppLogger.shared.log("⚠️ AI 액션 — 최대 반복 횟수(\(Self.aiGenMaxIterations))에 도달, 종료")
+                return
+            }
+            if intervalMs > 0 {
+                try await Task.sleep(for: .milliseconds(intervalMs))
+            }
         }
-        if rawActions.isEmpty {
-            AppLogger.shared.log("⚠️ AI 액션 — 생성된 액션이 없음")
-            return
-        }
+    }
+
+    /// Decode one batch of generated actions, translate their coordinates
+    /// from image-local pixels to Quartz screen space, and run them in
+    /// order. Each action's failure is logged but does not abort the
+    /// batch (matching the outer scenario run loop). A generated
+    /// `.nextScenario` short-circuits the rest of the batch.
+    private func executeGeneratedBatch(_ rawActions: [[String: Any]],
+                                       captureRect: CGRect,
+                                       cg: CGImage) async throws {
+        guard !rawActions.isEmpty else { return }
 
         // Coordinate translation: server returns image-local pixels with
-        // the image's pixelSize matching what we sent (the CGImage above).
-        // Both axes scale identically since CGWindowListCreateImage with
-        // `.nominalResolution` gives us point-equal pixels on non-Retina
+        // the image's pixelSize matching what we sent (the CGImage). Both
+        // axes scale identically since CGWindowListCreateImage with
+        // `.nominalResolution` gives point-equal pixels on non-Retina
         // sources but a 2× backing on Retina. Use the actual CG pixel
         // dimensions vs. our requested rect to derive the scale.
         let pixelW = Double(cg.width)
@@ -263,9 +307,6 @@ final class AutomationRunner {
                 AppLogger.shared.log("⚠️ AI 액션 — 디코딩 실패한 항목 건너뜀")
                 continue
             }
-            // Translate point from image-local pixels → Quartz screen
-            // coords. Skip for action kinds that don't carry a meaningful
-            // point (key / scroll).
             switch sub.type {
             case .key, .scroll:
                 break
@@ -276,8 +317,6 @@ final class AutomationRunner {
                     y: originY + Double(p.y) * scaleY
                 )
                 sub.point.onNext(translated)
-                // Drag waypoints carry their own coords in `text`; rewrite
-                // them through the same transform.
                 if case .drag = sub.type {
                     let waypoints = sub.dragWaypointsTimed.map { wp in
                         DragWaypoint(
@@ -294,7 +333,7 @@ final class AutomationRunner {
             generated.append(sub)
         }
 
-        AppLogger.shared.log("🤖 AI 액션 \(generated.count)개 실행 시작")
+        AppLogger.shared.log("🤖 AI 액션 \(generated.count)개 실행")
         for (i, gen) in generated.enumerated() {
             AppLogger.shared.log("   [\(i + 1)/\(generated.count)] \(gen.name)")
             do {
@@ -302,16 +341,11 @@ final class AutomationRunner {
             } catch {
                 AppLogger.shared.log("⚠️ AI 생성 액션 '\(gen.name)' 실패: \(error.localizedDescription)")
             }
-            // A generated `.nextScenario` sets this flag — bail out so
-            // subsequent generated steps don't run on the soon-to-be-
-            // abandoned flow. The outer run loop also checks the same
-            // flag and routes to the requested scenario.
             if nextScenarioRequest != nil {
                 AppLogger.shared.log("🤖 AI 액션 — 플로우 전환 요청 감지, 남은 단계 중단")
                 break
             }
         }
-        AppLogger.shared.log("🤖 AI 액션 완료")
     }
 
     // MARK: - Per-action handlers

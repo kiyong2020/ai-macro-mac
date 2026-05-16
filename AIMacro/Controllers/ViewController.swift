@@ -38,6 +38,23 @@ class ViewController: NSViewController {
     private var actionsBag = DisposeBag()
 
     private let isRunning = BehaviorSubject(value: false)
+
+    /// Held while we're either running or waiting in the cross-window run queue.
+    /// Nil while idle. Set in `requestRunSlot()` and cleared on natural finish
+    /// or user-initiated stop.
+    private var coordinatorToken: RunCoordinator.Token?
+
+    /// Sidebar "+ Add Action" button — disabled when the current scenario is
+    /// locked because another window is running it.
+    private var addActionButton: NSButton?
+
+    /// Translucent overlay covering the detail pane while editing is locked.
+    private var detailLockOverlay: NSView?
+
+    /// Invoked whenever the user switches to a different scenario or the
+    /// currently-loaded scenario is replaced/renamed. MainWindowController
+    /// uses this to keep the window/tab title in sync with the selection.
+    var onScenarioSelectionChanged: (() -> Void)?
     private var logTextView: NSTextView!
     /// The log area's scroll view + the height constraint we animate when
     /// the user toggles it open/closed via `logToggleButton`.
@@ -116,6 +133,7 @@ class ViewController: NSViewController {
         bindIsRunning()
         bindRunnerState()
         bindKeyboardListener()
+        bindCoordinatorLock()
 
         setupScenarioControls()
         setupSettingsButtonIcon()
@@ -140,10 +158,18 @@ class ViewController: NSViewController {
         view.window?.makeFirstResponder(view)
     }
 
+    /// True after `applyInitialScenarioId(_:)` has set a specific scenario.
+    /// Used to suppress the global `Preferences.lastScenarioId` fallback in
+    /// `viewDidLoad` so per-window restore values aren't clobbered.
+    private var didApplyInitialScenarioId = false
+
     /// Look up the scenario whose UUID matches the last saved selection and
     /// set `currentScenarioIndex` accordingly so `refreshScenarioPopup` shows
     /// it. Falls back to index 0 if no match (e.g. that scenario was deleted).
+    /// Skipped when the window controller has already seeded a per-window
+    /// scenario via `applyInitialScenarioId(_:)`.
     private func restoreLastSelectedScenario() {
+        if didApplyInitialScenarioId { return }
         guard let savedId = Preferences.lastScenarioId else { return }
         let scenarios = ScenarioStore.shared.scenarios
         if let idx = scenarios.firstIndex(where: { $0.id.uuidString == savedId }) {
@@ -188,6 +214,7 @@ class ViewController: NSViewController {
         addButton.toolTip = L("Append new action to current flow")
         addButton.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(addButton)
+        self.addActionButton = addButton
 
         // Capture the scroll view's existing top constraint to the parent so we
         // can transfer it to the button.
@@ -474,12 +501,88 @@ class ViewController: NSViewController {
                 self.elapsedTick?.invalidate()
                 self.elapsedTick = nil
                 self.runner.stop()
+                // If we held (or were waiting for) a slot in the cross-window
+                // run queue, release it now so other windows can proceed.
+                if let token = self.coordinatorToken {
+                    RunCoordinator.shared.cancel(token: token)
+                    self.coordinatorToken = nil
+                }
                 self.statusLabel.stringValue = "준비"
                 self.progressLabel.stringValue = ""
                 self.progressBar.isHidden = true
                 self.progressBar.doubleValue = 0
             }
         }.disposed(by: disposeBag)
+    }
+
+    /// Watch the cross-window coordinator. Whenever the scenario that's
+    /// currently being executed (anywhere in the app) matches the one this
+    /// window is showing, lock the edit surface.
+    private func bindCoordinatorLock() {
+        RunCoordinator.shared.activeScenarioId
+            .observe(on: MainScheduler.instance)
+            .subscribe(onNext: { [weak self] activeId in
+                guard let self = self else { return }
+                let mine = self.currentScenarioIdString()
+                self.applyEditingLock(activeId != nil && activeId == mine)
+            }).disposed(by: disposeBag)
+
+        // When the queue mutates and we hold a queued token, refresh the
+        // status label so "대기 중 (N번째)" stays accurate.
+        RunCoordinator.shared.queueDidChange
+            .observe(on: MainScheduler.instance)
+            .subscribe(onNext: { [weak self] _ in
+                self?.refreshQueueStatus()
+            }).disposed(by: disposeBag)
+    }
+
+    private func refreshQueueStatus() {
+        guard let token = coordinatorToken,
+              let pos = RunCoordinator.shared.queuePosition(of: token) else { return }
+        statusLabel.stringValue = "⏸ 대기 중 (\(pos)번째)"
+    }
+
+    /// Show/hide the lock overlay on the detail pane and gate mutation entry
+    /// points (add-action button, table reorder, right-click delete).
+    private func applyEditingLock(_ locked: Bool) {
+        addActionButton?.isEnabled = !locked
+
+        if locked {
+            if detailLockOverlay == nil, let container = detailContainer {
+                let overlay = NSVisualEffectView()
+                overlay.material = .hudWindow
+                overlay.blendingMode = .withinWindow
+                overlay.state = .active
+                overlay.translatesAutoresizingMaskIntoConstraints = false
+                let label = NSTextField(labelWithString: "🔒 다른 창에서 실행 중 — 편집 잠금")
+                label.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+                label.textColor = .secondaryLabelColor
+                label.translatesAutoresizingMaskIntoConstraints = false
+                overlay.addSubview(label)
+                container.addSubview(overlay, positioned: .above, relativeTo: nil)
+                NSLayoutConstraint.activate([
+                    overlay.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                    overlay.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                    overlay.topAnchor.constraint(equalTo: container.topAnchor),
+                    overlay.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                    label.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+                    label.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
+                ])
+                detailLockOverlay = overlay
+            }
+        } else {
+            detailLockOverlay?.removeFromSuperview()
+            detailLockOverlay = nil
+        }
+    }
+
+    /// True iff this window's currently-displayed scenario is being executed
+    /// (in this or any other window).
+    private var isCurrentScenarioLocked: Bool {
+        guard let active = try? RunCoordinator.shared.activeScenarioId.value() else {
+            return false
+        }
+        return active == currentScenarioIdString()
     }
 
     private func bindRunnerState() {
@@ -758,6 +861,7 @@ class ViewController: NSViewController {
         } else {
             refreshDetailPane()
         }
+        onScenarioSelectionChanged?()
     }
 
     @objc private func onAddScenario(_ sender: Any?) {
@@ -987,6 +1091,7 @@ class ViewController: NSViewController {
                   trimmed != current.name else { return }
             store.rename(at: currentScenarioIndex, to: trimmed)
             refreshScenarioPopup()
+            onScenarioSelectionChanged?()
             undoCoordinator.captureIfChanged()
         case .alertThirdButtonReturn:
             // Reuses the existing destructive-confirm flow.
@@ -1078,6 +1183,32 @@ class ViewController: NSViewController {
         return m
     }
 
+    /// Build menu items for the static File → 새로만들기 → 액션 추가 submenu.
+    /// Items target First Responder so the active window's ViewController
+    /// receives `appendActionFromMenu(_:)` and appends to its current scenario.
+    static func buildAppendActionSubmenuItems() -> [NSMenuItem] {
+        let types: [(String, AutoAction.ActionType)] = [
+            (L("🖱  Click"), .click),
+            (L("⬇  Scroll"), .scroll),
+            (L("✋  Drag"), .drag),
+            (L("⌨︎  Key"), .key),
+            (L("⏱  Wait"), .wait(type: .time)),
+            (L("🔍  OCR"), .ocr),
+            (L("📝  Script"), .script(code: "")),
+            (L("🌐🪟  Browser"), .openBrowser(url: "")),
+            (L("🪟  Window Frame"), .windowFrame),
+            (L("➡️  Next Flow"), .nextScenario),
+            (L("🤖  AI Generate"), .aiGen),
+        ]
+        return types.map { (label, type) in
+            let item = NSMenuItem(title: label,
+                                  action: #selector(appendActionFromMenu(_:)),
+                                  keyEquivalent: "")
+            item.representedObject = ActionInsertSpec(offset: 0, type: type)
+            return item
+        }
+    }
+
     /// Wrapper for `representedObject` — enums with associated values aren't
     /// always preserved cleanly across the Objective-C bridge, so we box them.
     private final class ActionInsertSpec: NSObject {
@@ -1109,11 +1240,15 @@ class ViewController: NSViewController {
     /// Routes all picks through `appendActionFromMenu` so the new row always
     /// lands at the end of the current scenario, regardless of whatever the
     /// table view's last `clickedRow` happened to be.
-    @objc private func showAppendActionMenu(_ sender: NSButton) {
+    @objc func showAppendActionMenu(_ sender: Any?) {
         let menu = makeAppendActionTypeMenu()
-        menu.popUp(positioning: nil,
-                   at: NSPoint(x: 0, y: sender.bounds.height + 2),
-                   in: sender)
+        if let view = sender as? NSView {
+            menu.popUp(positioning: nil,
+                       at: NSPoint(x: 0, y: view.bounds.height + 2),
+                       in: view)
+        } else if let event = NSApp.currentEvent {
+            NSMenu.popUpContextMenu(menu, with: event, for: self.view)
+        }
     }
 
     private func makeAppendActionTypeMenu() -> NSMenu {
@@ -1152,6 +1287,10 @@ class ViewController: NSViewController {
     }
 
     @objc private func deleteClickedAction() {
+        if isCurrentScenarioLocked {
+            AppLogger.shared.log("🔒 다른 창에서 실행 중 — 삭제 불가")
+            return
+        }
         let row = tableView.clickedRow
         let store = ScenarioStore.shared
         guard store.scenarios.indices.contains(currentScenarioIndex) else { return }
@@ -1258,7 +1397,25 @@ class ViewController: NSViewController {
 
         startCountdown(to: scheduledDate)
         self.timer = scheduleTask(at: scheduledDate) { [weak self] in
+            self?.requestRunSlot()
+        }
+    }
+
+    /// Called when the scheduled-time countdown fires. Asks the coordinator
+    /// for a turn — if no other window is running, fires immediately;
+    /// otherwise queues and surfaces "⏸ 대기 중 (N번째)" until we're up.
+    private func requestRunSlot() {
+        guard let sid = currentScenarioIdString() else {
+            isRunning.onNext(false)
+            return
+        }
+        let token = RunCoordinator.shared.requestRun(scenarioId: sid,
+                                                     owner: self) { [weak self] in
             self?.beginRun()
+        }
+        coordinatorToken = token
+        if RunCoordinator.shared.queuePosition(of: token) != nil {
+            refreshQueueStatus()
         }
     }
 
@@ -1312,10 +1469,22 @@ class ViewController: NSViewController {
             if let request = self.runner.nextScenarioRequest,
                try! self.isRunning.value(),
                self.advanceScenario(for: request) {
+                // Same slot, different scenario — update the lock target
+                // so windows showing the new scenario know to disable edits.
+                if let token = self.coordinatorToken,
+                   let newId = self.currentScenarioIdString() {
+                    RunCoordinator.shared.updateActiveScenario(token: token, to: newId)
+                }
                 self.beginRun()
                 return
             }
 
+            // Sequence complete (no chaining). Release the slot before
+            // flipping isRunning so the next queued window can start.
+            if let token = self.coordinatorToken {
+                RunCoordinator.shared.finish(token: token)
+                self.coordinatorToken = nil
+            }
             self.isRunning.onNext(false)
             self.statusLabel.stringValue = L("✓ Done")
         }
@@ -1444,6 +1613,51 @@ class ViewController: NSViewController {
         undoCoordinator.resetBaseline()
     }
 
+    // MARK: - MainWindowController integration
+
+    /// Returns the UUID string of the scenario currently displayed in this
+    /// window, or nil if no scenario is selected. Used by RunCoordinator to
+    /// route the cross-window edit lock and by MainWindowController to
+    /// persist per-window selection.
+    func currentScenarioIdString() -> String? {
+        let scenarios = ScenarioStore.shared.scenarios
+        guard scenarios.indices.contains(currentScenarioIndex) else { return nil }
+        return scenarios[currentScenarioIndex].id.uuidString
+    }
+
+    /// Override the saved-last-scenario restore for this specific window.
+    /// MainWindowController sets this before viewDidLoad runs the first time;
+    /// no-op if scenarios haven't been seeded yet.
+    func applyInitialScenarioId(_ id: String?) {
+        guard let id = id else { return }
+        let scenarios = ScenarioStore.shared.scenarios
+        if let idx = scenarios.firstIndex(where: { $0.id.uuidString == id }) {
+            currentScenarioIndex = idx
+            // Mark so viewDidLoad's `restoreLastSelectedScenario()` doesn't
+            // clobber this per-window selection with the global preference.
+            didApplyInitialScenarioId = true
+            // viewDidLoad may not have fired yet (storyboard hasn't loaded
+            // the view). When it runs, refreshScenarioPopup/loadCurrentScenario
+            // will pick up the new index. If it already ran, update the UI.
+            if scenarioPopup != nil {
+                scenarioPopup.selectItem(at: idx)
+                loadCurrentScenario()
+            }
+        }
+    }
+
+    /// Stop any active run + release the coordinator slot. Called by
+    /// MainWindowController.windowWillClose so a closed window doesn't
+    /// leave the cross-window queue stuck.
+    func prepareForWindowClose() {
+        if try! isRunning.value() {
+            isRunning.onNext(false)  // cleanup cancels token + stops runner
+        } else if let token = coordinatorToken {
+            RunCoordinator.shared.cancel(token: token)
+            coordinatorToken = nil
+        }
+    }
+
     private func currentScenarioSlug() -> String {
         let scenarios = ScenarioStore.shared.scenarios
         guard scenarios.indices.contains(currentScenarioIndex) else { return "scenario" }
@@ -1525,6 +1739,10 @@ extension ViewController: NSTableViewDataSource {
 
     func tableView(_ tableView: NSTableView,
                    pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+        // Don't allow reordering while the scenario is being executed (in
+        // any window) — mutating the list out from under the runner is the
+        // user-facing manifestation of "edit lock during run".
+        if isCurrentScenarioLocked { return nil }
         let item = NSPasteboardItem()
         item.setString(String(row), forType: ViewController.actionRowDragType)
         return item

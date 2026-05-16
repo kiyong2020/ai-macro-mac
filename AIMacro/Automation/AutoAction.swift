@@ -355,6 +355,92 @@ extension AutoAction {
     }
 }
 
+// MARK: - .aiGen payload (instruction + loop interval)
+
+/// `.aiGen` packs two things into `action.text`:
+/// - the natural-language instruction (free-form user text), and
+/// - an optional inter-iteration interval (seconds) used by the runner
+///   between successive `/generate-actions` calls in the multi-turn loop.
+///
+/// Encoded as a leading header line followed by the instruction body:
+/// ```
+/// @interval=2.0
+/// 로그인 버튼을 클릭
+/// ```
+/// Legacy `.aiGen` actions (no header) decode with `interval == nil` and
+/// the runner falls back to `AIGenPayload.defaultInterval`.
+struct AIGenPayload {
+    static let defaultInterval: Double = 1.0
+    static let intervalRange: ClosedRange<Double> = 0.1 ... 60.0
+
+    var instruction: String = ""
+    /// `nil` ⇒ no header was present (legacy / never edited).
+    var interval: Double?
+
+    static func parse(_ raw: String) -> AIGenPayload {
+        var payload = AIGenPayload()
+        guard let firstNewline = raw.firstIndex(of: "\n") else {
+            payload.instruction = raw
+            return payload
+        }
+        let header = raw[..<firstNewline]
+        if header.hasPrefix("@interval=") {
+            let value = header.dropFirst("@interval=".count)
+            if let n = Double(value) {
+                payload.interval = max(intervalRange.lowerBound,
+                                       min(intervalRange.upperBound, n))
+                payload.instruction = String(raw[raw.index(after: firstNewline)...])
+                return payload
+            }
+        }
+        payload.instruction = raw
+        return payload
+    }
+
+    func encode() -> String {
+        guard let interval = interval else { return instruction }
+        return "@interval=\(formatInterval(interval))\n\(instruction)"
+    }
+
+    /// Trim trailing zeros so 2.0 → "2", 1.5 → "1.5". Keeps the encoded
+    /// text stable so re-saving an unchanged action doesn't churn the file.
+    private func formatInterval(_ v: Double) -> String {
+        if v.truncatingRemainder(dividingBy: 1) == 0 {
+            return String(Int(v))
+        }
+        return String(format: "%g", v)
+    }
+}
+
+extension AutoAction {
+    /// Free-form instruction for `.aiGen`, with any encoded header
+    /// stripped. Use this instead of reading `action.text` directly.
+    var aiGenInstruction: String {
+        AIGenPayload.parse((try? text.value()) ?? "").instruction
+    }
+
+    /// Inter-iteration delay (seconds) the runner waits between successive
+    /// `/generate-actions` calls. Falls back to
+    /// `AIGenPayload.defaultInterval` when the user hasn't set a value.
+    var aiGenInterval: Double {
+        AIGenPayload.parse((try? text.value()) ?? "").interval
+            ?? AIGenPayload.defaultInterval
+    }
+
+    func setAIGenInstruction(_ instruction: String) {
+        var p = AIGenPayload.parse((try? text.value()) ?? "")
+        p.instruction = instruction
+        text.onNext(p.encode())
+    }
+
+    func setAIGenInterval(_ seconds: Double) {
+        var p = AIGenPayload.parse((try? text.value()) ?? "")
+        p.interval = max(AIGenPayload.intervalRange.lowerBound,
+                         min(AIGenPayload.intervalRange.upperBound, seconds))
+        text.onNext(p.encode())
+    }
+}
+
 // MARK: - .click button + modifier flags
 
 /// Mouse button selection for `.click` actions.

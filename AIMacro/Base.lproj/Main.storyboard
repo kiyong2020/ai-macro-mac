@@ -60,10 +60,46 @@
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <menu key="submenu" title="File" id="bib-Uj-vzu">
                                     <items>
-                                        <menuItem title="New" keyEquivalent="n" id="Was-JA-tGl">
-                                            <connections>
-                                                <action selector="newDocument:" target="Ady-hI-5gd" id="4Si-XN-c54"/>
-                                            </connections>
+                                        <menuItem title="New" id="Was-JA-tGl">
+                                            <modifierMask key="keyEquivalentModifierMask"/>
+                                            <menu key="submenu" title="New" id="aim-1n-grp">
+                                                <items>
+                                                    <menuItem title="Add Flow" id="aim-1n-flw">
+                                                        <modifierMask key="keyEquivalentModifierMask"/>
+                                                        <menu key="submenu" title="Add Flow" id="aim-1n-fSM">
+                                                            <items>
+                                                                <menuItem title="Empty Flow" id="aim-1n-fEM">
+                                                                    <modifierMask key="keyEquivalentModifierMask"/>
+                                                                    <connections>
+                                                                        <action selector="addEmptyScenario:" target="Ady-hI-5gd" id="aim-1n-cEM"/>
+                                                                    </connections>
+                                                                </menuItem>
+                                                                <menuItem title="Duplicate Current Flow" id="aim-1n-fDU">
+                                                                    <modifierMask key="keyEquivalentModifierMask"/>
+                                                                    <connections>
+                                                                        <action selector="duplicateCurrentScenario:" target="Ady-hI-5gd" id="aim-1n-cDU"/>
+                                                                    </connections>
+                                                                </menuItem>
+                                                                <menuItem title="Record Sequence" id="aim-1n-fRC">
+                                                                    <modifierMask key="keyEquivalentModifierMask"/>
+                                                                    <connections>
+                                                                        <action selector="beginSequenceRecording:" target="Ady-hI-5gd" id="aim-1n-cRC"/>
+                                                                    </connections>
+                                                                </menuItem>
+                                                            </items>
+                                                        </menu>
+                                                    </menuItem>
+                                                    <menuItem title="Add Action" tag="9001" id="aim-1n-act">
+                                                        <modifierMask key="keyEquivalentModifierMask"/>
+                                                        <menu key="submenu" title="Add Action" id="aim-1n-aSM"/>
+                                                    </menuItem>
+                                                    <menuItem title="Add Runner" keyEquivalent="n" id="aim-1n-run">
+                                                        <connections>
+                                                            <action selector="newDocument:" target="Ady-hI-5gd" id="aim-1n-cRN"/>
+                                                        </connections>
+                                                    </menuItem>
+                                                </items>
+                                            </menu>
                                         </menuItem>
                                         <menuItem title="Open…" keyEquivalent="o" id="IAo-SY-fd9">
                                             <connections>
@@ -684,7 +720,7 @@
         <!--Window Controller-->
         <scene sceneID="R2V-B0-nI4">
             <objects>
-                <windowController id="B8D-0N-5wS" sceneMemberID="viewController">
+                <windowController id="B8D-0N-5wS" storyboardIdentifier="MainWindowController" customClass="MainWindowController" customModule="AIMacro" customModuleProvider="target" sceneMemberID="viewController">
                     <window key="window" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="IQv-IB-iLA">
                         <windowStyleMask key="styleMask" titled="YES" closable="YES" miniaturizable="YES" resizable="YES"/>
                         <windowPositionMask key="initialPositionMask" leftStrut="YES" rightStrut="YES" topStrut="YES" bottomStrut="YES"/>
