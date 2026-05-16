@@ -225,10 +225,20 @@ final class AutomationRunner {
         }
 
         let intervalMs = max(0, Int((action.aiGenInterval * 1000.0).rounded()))
+        let endCondition = action.aiGenEndCondition
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // Empty end condition ⇒ single-call mode: capture once, execute the
+        // returned batch, then stop. The model's `finish` flag is irrelevant
+        // in this mode.
+        let maxIterations = endCondition.isEmpty ? 1 : Self.aiGenMaxIterations
 
-        AppLogger.shared.log("🤖 AI 액션 시작 (지시문: \(instruction.prefix(40))…, 간격: \(String(format: "%g", action.aiGenInterval))s)")
+        if endCondition.isEmpty {
+            AppLogger.shared.log("🤖 AI 액션 시작 (지시문: \(instruction.prefix(40))…, 1회 호출)")
+        } else {
+            AppLogger.shared.log("🤖 AI 액션 시작 (지시문: \(instruction.prefix(40))…, 간격: \(String(format: "%g", action.aiGenInterval))s, 종료조건: \(endCondition.prefix(40)))")
+        }
 
-        for iteration in 1 ... Self.aiGenMaxIterations {
+        for iteration in 1 ... maxIterations {
             // Capture a fresh screenshot for each turn — the whole point
             // of the loop is that the model sees the result of the prior
             // turn's actions before deciding what to do next.
@@ -242,13 +252,18 @@ final class AutomationRunner {
             let img = NSImage(cgImage: cg,
                               size: NSSize(width: cg.width, height: cg.height))
 
-            AppLogger.shared.log("🤖 AI 턴 \(iteration)/\(Self.aiGenMaxIterations) 호출 중…")
+            if endCondition.isEmpty {
+                AppLogger.shared.log("🤖 AI 호출 중…")
+            } else {
+                AppLogger.shared.log("🤖 AI 턴 \(iteration)/\(maxIterations) 호출 중…")
+            }
 
             let result: ActionGenService.GenerateResult
             do {
                 result = try await ActionGenService.shared.generate(
                     image: img,
                     instruction: instruction,
+                    endCondition: endCondition,
                     defaultDelay: baseDelay,
                     scenarios: scenarios,
                     currentScenarioId: currentScenarioId
@@ -264,12 +279,17 @@ final class AutomationRunner {
                 AppLogger.shared.log("🤖 AI 액션 — 플로우 전환 요청 감지, 루프 종료")
                 return
             }
-            if result.finish {
-                AppLogger.shared.log("🤖 AI 액션 완료 (finish)")
+            // One-shot mode: maxIterations == 1, so we always stop here.
+            if endCondition.isEmpty {
+                AppLogger.shared.log("🤖 AI 액션 완료 (1회 실행)")
                 return
             }
-            if iteration == Self.aiGenMaxIterations {
-                AppLogger.shared.log("⚠️ AI 액션 — 최대 반복 횟수(\(Self.aiGenMaxIterations))에 도달, 종료")
+            if result.finish {
+                AppLogger.shared.log("🤖 AI 액션 완료 (종료 조건 충족)")
+                return
+            }
+            if iteration == maxIterations {
+                AppLogger.shared.log("⚠️ AI 액션 — 최대 반복 횟수(\(maxIterations))에 도달, 종료")
                 return
             }
             if intervalMs > 0 {

@@ -85,6 +85,12 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "드래그" } }
       }
     },
+    "End Condition" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "종료 조건" } }
+      }
+    },
     "Add flow" : {
       "extractionState" : "manual",
       "localizations" : {

@@ -59,11 +59,17 @@ final class ActionGenService {
     /// region's origin before running the actions.
     ///
     /// - Parameters:
+    ///   - endCondition: User-provided text describing when the loop
+    ///     should stop. Empty string ⇒ caller is in one-shot mode (the
+    ///     server's `finish` flag is informational only); non-empty ⇒
+    ///     the server should set `finish: true` once the condition is
+    ///     visibly satisfied in the screenshot.
     ///   - scenarios: Flows the AI may branch to. Empty disables branching.
     ///   - currentScenarioId: UUID of the flow `.aiGen` is running inside.
     ///     The AI is told not to branch to itself.
     func generate(image: NSImage,
                   instruction: String,
+                  endCondition: String = "",
                   defaultDelay: Double,
                   scenarios: [ScenarioInfo] = [],
                   currentScenarioId: String? = nil) async throws -> GenerateResult {
@@ -85,6 +91,10 @@ final class ActionGenService {
             "instruction": instruction,
             "default_delay": defaultDelay,
         ]
+        let trimmedEnd = endCondition.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedEnd.isEmpty {
+            body["end_condition"] = trimmedEnd
+        }
         if !scenarios.isEmpty {
             body["scenarios"] = scenarios.map { ["id": $0.id, "name": $0.name] }
         }

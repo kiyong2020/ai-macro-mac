@@ -301,6 +301,10 @@ final class ActionDetailBuilder {
                         control: makeAIGenInstructionField(action, disposeBag: disposeBag,
                                                            placeholder: "예: 로그인 버튼을 클릭"),
                         hint: "캡처 영역에 대해 무엇을 할지 자연어로 적어주세요. 서버가 동작을 자동 생성합니다.")
+            card.addRow(label: L("End Condition"),
+                        control: makeAIGenEndConditionField(action, disposeBag: disposeBag,
+                                                            placeholder: "예: 로그인 화면이 보이면 종료"),
+                        hint: "비워두면 1회만 호출 후 종료. 입력 시 조건이 충족될 때까지 반복")
             card.addRow(label: L("Interval"),
                         control: makeAIGenIntervalField(action, disposeBag: disposeBag),
                         hint: "서버 호출 사이 대기 시간 (각 턴마다 화면 캡처 후 액션 실행)")
@@ -779,6 +783,24 @@ final class ActionDetailBuilder {
             placeholderLabel.topAnchor.constraint(equalTo: scroll.topAnchor, constant: 4),
         ])
         return scroll
+    }
+
+    /// Single-line text field for the `.aiGen` end condition. Empty value
+    /// switches the runner into one-shot mode (no loop); non-empty value
+    /// is forwarded to the server each turn so the model can decide when
+    /// to set `finish: true`. Writes via `setAIGenEndCondition` so the
+    /// encoded header is updated without touching the instruction body.
+    private func makeAIGenEndConditionField(_ action: AutoAction,
+                                            disposeBag: DisposeBag,
+                                            placeholder: String) -> NSView {
+        let field = NSTextField(string: action.aiGenEndCondition)
+        field.placeholderString = placeholder
+        field.bezelStyle = .roundedBezel
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.delegate = TextFieldChangeDelegate.attach(to: field) { [weak action] new in
+            action?.setAIGenEndCondition(new)
+        }
+        return field
     }
 
     /// Numeric field for the `.aiGen` inter-iteration interval (seconds).

@@ -355,20 +355,25 @@ extension AutoAction {
     }
 }
 
-// MARK: - .aiGen payload (instruction + loop interval)
+// MARK: - .aiGen payload (instruction + loop interval + end condition)
 
-/// `.aiGen` packs two things into `action.text`:
-/// - the natural-language instruction (free-form user text), and
-/// - an optional inter-iteration interval (seconds) used by the runner
-///   between successive `/generate-actions` calls in the multi-turn loop.
+/// `.aiGen` packs three things into `action.text`:
+/// - the natural-language instruction (free-form user text),
+/// - an optional inter-iteration interval (seconds) for the multi-turn loop,
+/// - an optional end condition (single-line) — when present, the runner
+///   keeps calling `/generate-actions` until the model reports the
+///   condition is satisfied; when empty, the runner makes exactly one call.
 ///
-/// Encoded as a leading header line followed by the instruction body:
+/// Encoded as zero-or-more `@key=value` header lines at the top followed
+/// by the instruction body:
 /// ```
 /// @interval=2.0
+/// @end=로그인 화면이 보이면 종료
 /// 로그인 버튼을 클릭
 /// ```
-/// Legacy `.aiGen` actions (no header) decode with `interval == nil` and
-/// the runner falls back to `AIGenPayload.defaultInterval`.
+/// Headers may appear in any order. Lines that don't match `@key=value`
+/// terminate the header section, so legacy `.aiGen` actions (no header at
+/// all) still decode cleanly with the body as `instruction`.
 struct AIGenPayload {
     static let defaultInterval: Double = 1.0
     static let intervalRange: ClosedRange<Double> = 0.1 ... 60.0
@@ -376,30 +381,54 @@ struct AIGenPayload {
     var instruction: String = ""
     /// `nil` ⇒ no header was present (legacy / never edited).
     var interval: Double?
+    /// Empty ⇒ one-shot mode (runner stops after a single API call).
+    var endCondition: String = ""
 
     static func parse(_ raw: String) -> AIGenPayload {
         var payload = AIGenPayload()
-        guard let firstNewline = raw.firstIndex(of: "\n") else {
-            payload.instruction = raw
-            return payload
-        }
-        let header = raw[..<firstNewline]
-        if header.hasPrefix("@interval=") {
-            let value = header.dropFirst("@interval=".count)
-            if let n = Double(value) {
-                payload.interval = max(intervalRange.lowerBound,
-                                       min(intervalRange.upperBound, n))
-                payload.instruction = String(raw[raw.index(after: firstNewline)...])
-                return payload
+        let lines = raw.components(separatedBy: "\n")
+        var headerCount = 0
+        for line in lines {
+            guard line.hasPrefix("@"),
+                  let eq = line.firstIndex(of: "="),
+                  eq > line.startIndex else { break }
+            let key = String(line[line.index(after: line.startIndex) ..< eq])
+            let value = String(line[line.index(after: eq)...])
+            switch key {
+            case "interval":
+                if let n = Double(value) {
+                    payload.interval = max(intervalRange.lowerBound,
+                                           min(intervalRange.upperBound, n))
+                }
+            case "end":
+                payload.endCondition = value
+            default:
+                // Unknown header — stop parsing and treat as body so we
+                // don't silently swallow content the user typed.
+                return finalize(payload: payload, body: lines.dropFirst(headerCount).joined(separator: "\n"))
             }
+            headerCount += 1
         }
-        payload.instruction = raw
-        return payload
+        return finalize(payload: payload,
+                        body: lines.dropFirst(headerCount).joined(separator: "\n"))
+    }
+
+    private static func finalize(payload: AIGenPayload, body: String) -> AIGenPayload {
+        var p = payload
+        p.instruction = body
+        return p
     }
 
     func encode() -> String {
-        guard let interval = interval else { return instruction }
-        return "@interval=\(formatInterval(interval))\n\(instruction)"
+        var lines: [String] = []
+        if let interval = interval {
+            lines.append("@interval=\(formatInterval(interval))")
+        }
+        if !endCondition.isEmpty {
+            lines.append("@end=\(sanitizeSingleLine(endCondition))")
+        }
+        lines.append(instruction)
+        return lines.joined(separator: "\n")
     }
 
     /// Trim trailing zeros so 2.0 → "2", 1.5 → "1.5". Keeps the encoded
@@ -409,6 +438,12 @@ struct AIGenPayload {
             return String(Int(v))
         }
         return String(format: "%g", v)
+    }
+
+    private func sanitizeSingleLine(_ s: String) -> String {
+        s.replacingOccurrences(of: "\r\n", with: " ")
+         .replacingOccurrences(of: "\n", with: " ")
+         .replacingOccurrences(of: "\r", with: " ")
     }
 }
 
@@ -427,6 +462,11 @@ extension AutoAction {
             ?? AIGenPayload.defaultInterval
     }
 
+    /// Optional end condition. Empty ⇒ runner makes exactly one API call.
+    var aiGenEndCondition: String {
+        AIGenPayload.parse((try? text.value()) ?? "").endCondition
+    }
+
     func setAIGenInstruction(_ instruction: String) {
         var p = AIGenPayload.parse((try? text.value()) ?? "")
         p.instruction = instruction
@@ -437,6 +477,12 @@ extension AutoAction {
         var p = AIGenPayload.parse((try? text.value()) ?? "")
         p.interval = max(AIGenPayload.intervalRange.lowerBound,
                          min(AIGenPayload.intervalRange.upperBound, seconds))
+        text.onNext(p.encode())
+    }
+
+    func setAIGenEndCondition(_ condition: String) {
+        var p = AIGenPayload.parse((try? text.value()) ?? "")
+        p.endCondition = condition.trimmingCharacters(in: .whitespacesAndNewlines)
         text.onNext(p.encode())
     }
 }
