@@ -3,7 +3,7 @@
 //  AIMacro
 //
 //  Persistent store for user-editable scenarios. Loads/saves a JSON file in
-//  Application Support, and seeds a single empty default flow ("나의 플로우")
+//  Application Support, and seeds a single empty default flow ("My Flow")
 //  on first launch.
 //
 
@@ -139,7 +139,7 @@ final class ScenarioStore {
 
     private func seedDefaults() {
         scenarios = [
-            Scenario(name: "나의 플로우", actions: [])
+            Scenario(name: L("My Flow"), actions: [])
         ]
     }
 }

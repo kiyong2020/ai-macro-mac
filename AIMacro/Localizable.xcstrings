@@ -67,6 +67,12 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "클릭 위치" } }
       }
     },
+    "Default Mode" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "기본모드" } }
+      }
+    },
     "Delay" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -145,16 +151,22 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "수정자" } }
       }
     },
+    "My Flow" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "나의 플로우" } }
+      }
+    },
     "Name" : {
       "extractionState" : "manual",
       "localizations" : {
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "이름" } }
       }
     },
-    "Next Flow" : {
+    "Go to Flow" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "다음 플로우" } }
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "플로우 이동" } }
       }
     },
     "Behavior" : {
@@ -181,10 +193,10 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "현재 플로우를 종료하고 선택한 플로우를 새로 시작합니다." } }
       }
     },
-    "➡️  Next Flow" : {
+    "➡️  Go to Flow" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "➡️  다음 플로우" } }
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "➡️  플로우 이동" } }
       }
     },
     "New Chrome Window" : {
@@ -377,6 +389,12 @@
       "extractionState" : "manual",
       "localizations" : {
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "URL" } }
+      }
+    },
+    "Use default" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "기본 모드 따름" } }
       }
     },
     "URL Settings" : {

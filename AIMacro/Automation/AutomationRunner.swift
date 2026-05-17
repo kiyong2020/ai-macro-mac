@@ -57,6 +57,13 @@ final class AutomationRunner {
     /// the server can keep the AI from branching to itself).
     var currentScenarioId: String?
 
+    /// UUID of the FlowMode active for this run. Used by `.nextScenario`
+    /// to pick a per-mode target — unset / unknown values fall back to
+    /// the default (first) FlowMode's target, then to the legacy value,
+    /// then to "next in list". Set by the view controller before each
+    /// call to `run(_:)`.
+    var currentFlowModeId: String?
+
     enum NextScenarioRequest {
         case next
         case specific(id: String)
@@ -387,10 +394,13 @@ final class AutomationRunner {
 
     /// Populates `nextScenarioRequest` so the run loop short-circuits and
     /// the view controller routes the run to the right scenario. The
-    /// target is encoded in `action.text` — empty for "next in list",
-    /// or a scenario UUID for a specific jump.
+    /// target is resolved per-FlowMode via `NextScenarioPayload` — empty
+    /// means "next in list", any non-empty value is a scenario UUID.
     private func runNextScenario(_ action: AutoAction) {
-        let raw = ((try? action.text.value()) ?? "")
+        let defaultModeId = FlowModeStore.shared.flowModes.first?.id.uuidString
+        let raw = action
+            .nextScenarioTarget(forCurrentModeId: currentFlowModeId,
+                                defaultModeId: defaultModeId)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.isEmpty {
             nextScenarioRequest = .next

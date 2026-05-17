@@ -289,10 +289,8 @@ final class ActionDetailBuilder {
             cards.append(card)
 
         case .nextScenario:
-            let card = makeCard(title: L("Next Flow"))
-            card.addRow(label: L("Target"),
-                        control: makeNextScenarioPopup(action, disposeBag: disposeBag),
-                        hint: L("Stops the current flow and starts the next one in the list."))
+            let card = makeCard(title: L("Go to Flow"))
+            addNextScenarioRows(to: card, action: action, disposeBag: disposeBag)
             cards.append(card)
 
         case .aiGen:
@@ -403,16 +401,44 @@ final class ActionDetailBuilder {
         return row
     }
 
-    /// Pop-up for `.nextScenario` actions — first item routes "to the next
-    /// scenario in the list" (action.text == ""), the remaining items are
-    /// each scenario by name with the scenario UUID stored in action.text.
-    /// Stays in sync with `ScenarioStore` changes via the
-    /// `ScenarioStore.didChangeNotification`.
-    private func makeNextScenarioPopup(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
+    /// Add one row per FlowMode to the `.nextScenario` card. The default
+    /// (first) mode shows `[Next in list, scenario1, ...]`; non-default
+    /// modes prepend a `Use default` option that clears the per-mode
+    /// override so they fall back to the default mode's target.
+    private func addNextScenarioRows(to card: CardView,
+                                     action: AutoAction,
+                                     disposeBag: DisposeBag) {
+        let modes = FlowModeStore.shared.flowModes
+        guard let defaultModeId = modes.first?.id.uuidString else { return }
+        for (i, mode) in modes.enumerated() {
+            let isDefault = (i == 0)
+            let popup = makeNextScenarioPopupForMode(
+                action: action,
+                modeId: mode.id.uuidString,
+                defaultModeId: defaultModeId,
+                isDefaultMode: isDefault,
+                disposeBag: disposeBag
+            )
+            let hint = isDefault
+                ? L("Stops the current flow and starts the next one in the list.")
+                : nil
+            card.addRow(label: mode.name, control: popup, hint: hint)
+        }
+    }
+
+    private func makeNextScenarioPopupForMode(action: AutoAction,
+                                              modeId: String,
+                                              defaultModeId: String,
+                                              isDefaultMode: Bool,
+                                              disposeBag: DisposeBag) -> NSView {
         let popup = NSPopUpButton(frame: .zero, pullsDown: false)
         popup.translatesAutoresizingMaskIntoConstraints = false
 
-        let bridge = NextScenarioPopupBridge(action: action, popup: popup)
+        let bridge = NextScenarioPopupBridge(action: action,
+                                             popup: popup,
+                                             modeId: modeId,
+                                             defaultModeId: defaultModeId,
+                                             isDefaultMode: isDefaultMode)
         popup.target = bridge
         popup.action = #selector(NextScenarioPopupBridge.changed(_:))
         objc_setAssociatedObject(popup, &Self.nextScenarioBridgeAssocKey,
@@ -2027,7 +2053,7 @@ enum ActionIcons {
         case .openChrome:           return L("New Chrome Window")
         case .openBrowser:          return L("Browser")
         case .windowFrame:          return L("Window Frame")
-        case .nextScenario:         return L("Next Flow")
+        case .nextScenario:         return L("Go to Flow")
         case .aiGen:                return L("AI Generate")
         }
     }
@@ -2594,30 +2620,51 @@ private final class AreaSelectionView: NSView {
     }
 }
 
-/// Popup bridge for `.nextScenario` actions. The popup's first item is
-/// "Next in list" (empty action.text); subsequent items are one per
-/// scenario, with the scenario UUID stored as the menu item's
-/// `representedObject`. Selecting an item writes that UUID (or empty
-/// string for "next in list") into `action.text`.
+/// Popup bridge for one FlowMode-row in the `.nextScenario` card.
+///
+/// Menu item `representedObject` encodes the choice:
+/// - `NSNull` → "Use default" (non-default modes only); writes `nil`
+///   per-mode override so the runner falls back to the default mode.
+/// - `""` (empty string) → "Next in list"; writes empty target for this
+///   mode.
+/// - scenario UUID → writes that UUID for this mode.
 private final class NextScenarioPopupBridge: NSObject {
     private weak var action: AutoAction?
     private let popup: NSPopUpButton
+    private let modeId: String
+    private let defaultModeId: String
+    private let isDefaultMode: Bool
 
-    init(action: AutoAction, popup: NSPopUpButton) {
+    init(action: AutoAction,
+         popup: NSPopUpButton,
+         modeId: String,
+         defaultModeId: String,
+         isDefaultMode: Bool) {
         self.action = action
         self.popup = popup
+        self.modeId = modeId
+        self.defaultModeId = defaultModeId
+        self.isDefaultMode = isDefaultMode
     }
 
     /// Rebuild the popup's items from the current `ScenarioStore` and
-    /// restore selection from `action.text`.
+    /// restore selection from the action's per-mode target.
     func repopulate() {
         popup.removeAllItems()
 
-        let defaultItem = NSMenuItem(
+        if !isDefaultMode {
+            let useDefault = NSMenuItem(
+                title: NSLocalizedString("Use default", comment: ""),
+                action: nil, keyEquivalent: "")
+            useDefault.representedObject = NSNull()
+            popup.menu?.addItem(useDefault)
+        }
+
+        let nextInList = NSMenuItem(
             title: NSLocalizedString("Next in list", comment: ""),
             action: nil, keyEquivalent: "")
-        defaultItem.representedObject = ""
-        popup.menu?.addItem(defaultItem)
+        nextInList.representedObject = ""
+        popup.menu?.addItem(nextInList)
 
         for scenario in ScenarioStore.shared.scenarios {
             let item = NSMenuItem(title: scenario.name, action: nil, keyEquivalent: "")
@@ -2625,17 +2672,47 @@ private final class NextScenarioPopupBridge: NSObject {
             popup.menu?.addItem(item)
         }
 
-        let currentId = ((try? action?.text.value()) ?? "")?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let idx = popup.menu?.items.firstIndex(where: {
-            ($0.representedObject as? String) == currentId
+        // Resolve which item to select.
+        // - Non-default modes: `nil` → "Use default"; explicit → that value.
+        // - Default mode: show explicit if present, otherwise the legacy
+        //   bare value (visual continuity for unmigrated actions),
+        //   otherwise "Next in list" (`""`).
+        let selection: Any  // String or NSNull
+        if isDefaultMode {
+            let p = action?.nextScenarioPayload
+            if let explicit = p?.targets[modeId] {
+                selection = explicit
+            } else if let legacy = p?.legacyTarget {
+                selection = legacy
+            } else {
+                selection = ""
+            }
+        } else if let explicit = action?.nextScenarioExplicitTarget(forModeId: modeId) {
+            selection = explicit
+        } else {
+            selection = NSNull()
+        }
+
+        let idx = popup.menu?.items.firstIndex(where: { item in
+            if selection is NSNull {
+                return item.representedObject is NSNull
+            }
+            return (item.representedObject as? String) == (selection as? String)
         }) ?? 0
         popup.selectItem(at: idx)
     }
 
     @objc func changed(_ sender: NSPopUpButton) {
-        let value = (sender.selectedItem?.representedObject as? String) ?? ""
-        action?.text.onNext(value)
+        let rep = sender.selectedItem?.representedObject
+        let newTarget: String?
+        if rep is NSNull {
+            newTarget = nil
+        } else {
+            newTarget = (rep as? String) ?? ""
+        }
+        action?.setNextScenarioTarget(newTarget,
+                                      forModeId: modeId,
+                                      defaultModeId: defaultModeId)
     }
 }
 

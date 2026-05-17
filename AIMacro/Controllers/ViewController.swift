@@ -87,6 +87,17 @@ class ViewController: NSViewController {
     /// Anchor button for the scenario-edit popover (rename + delete).
     private var scenarioEditButton: NSButton!
 
+    /// Storyboard settings gear button, captured in `setupSettingsButtonIcon()`
+    /// so other top-right widgets (e.g. the flow-mode picker) can anchor to it.
+    private var settingsButton: NSButton?
+    /// FlowMode picker placed just below the settings gear. Populated from
+    /// `FlowModeStore` and refreshed on `FlowModeStore.didChangeNotification`.
+    private var flowModePopup: NSPopUpButton!
+    /// Anchor button for the FlowMode rename/delete popover (mirrors
+    /// `scenarioEditButton`).
+    private var flowModeEditButton: NSButton!
+    private var currentFlowModeIndex: Int = 0
+
     /// Backs undo/redo for scenario + action edits. The Edit menu's
     /// `undo:` / `redo:` items resolve through the responder chain to
     /// this manager via the `undoManager` override below.
@@ -137,6 +148,7 @@ class ViewController: NSViewController {
 
         setupScenarioControls()
         setupSettingsButtonIcon()
+        setupFlowModePicker()
         setupMasterDetailLayout()
         setupActionTableMenu()
         restoreLastSelectedScenario()
@@ -788,6 +800,7 @@ class ViewController: NSViewController {
             return nil
         }
         guard let btn = find(in: view) else { return }
+        settingsButton = btn
 
         let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
         let symbolNames = ["gearshape", "gear"]
@@ -801,6 +814,176 @@ class ViewController: NSViewController {
                 btn.contentTintColor = .secondaryLabelColor
                 break
             }
+        }
+    }
+
+    /// Build the FlowMode picker + edit button and pin it just below the
+    /// settings gear in the top-right corner. Falls back to the view's
+    /// top-trailing if the settings button wasn't found (storyboard mismatch
+    /// — shouldn't happen).
+    private func setupFlowModePicker() {
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.target = self
+        popup.action = #selector(onChangeFlowMode(_:))
+        popup.controlSize = .small
+        popup.translatesAutoresizingMaskIntoConstraints = false
+        flowModePopup = popup
+
+        let addBtn = NSButton(title: "＋",
+                              target: self,
+                              action: #selector(onAddFlowMode(_:)))
+        addBtn.bezelStyle = .roundRect
+        addBtn.controlSize = .small
+        addBtn.translatesAutoresizingMaskIntoConstraints = false
+        addBtn.toolTip = L("Add flow")
+
+        let editBtn = NSButton(title: "편집",
+                               target: self,
+                               action: #selector(showFlowModeEditPopover))
+        editBtn.bezelStyle = .roundRect
+        editBtn.controlSize = .small
+        editBtn.translatesAutoresizingMaskIntoConstraints = false
+        editBtn.toolTip = L("Rename / delete flow")
+        flowModeEditButton = editBtn
+
+        let stack = NSStackView(views: [addBtn, popup, editBtn])
+        stack.orientation = .horizontal
+        stack.spacing = 6
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stack)
+
+        let topAnchor: NSLayoutYAxisAnchor
+        let trailingAnchor: NSLayoutXAxisAnchor
+        let topConstant: CGFloat
+        if let anchor = settingsButton {
+            topAnchor = anchor.bottomAnchor
+            trailingAnchor = anchor.trailingAnchor
+            topConstant = 6
+        } else {
+            topAnchor = view.topAnchor
+            trailingAnchor = view.trailingAnchor
+            topConstant = 40
+        }
+
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: topConstant),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            popup.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+        ])
+
+        refreshFlowModePopup()
+
+        NotificationCenter.default.addObserver(
+            forName: FlowModeStore.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshFlowModePopup()
+            // `.nextScenario` detail rows are keyed by the FlowMode list,
+            // so rebuild the detail pane when modes are added/renamed/deleted.
+            self?.refreshDetailPane()
+        }
+    }
+
+    private func refreshFlowModePopup() {
+        guard let popup = flowModePopup else { return }
+        popup.removeAllItems()
+        let modes = FlowModeStore.shared.flowModes
+        for mode in modes {
+            popup.addItem(withTitle: mode.name)
+        }
+        let safeIndex = min(max(0, currentFlowModeIndex), modes.count - 1)
+        if modes.indices.contains(safeIndex) {
+            popup.selectItem(at: safeIndex)
+            currentFlowModeIndex = safeIndex
+        }
+        updateFlowModeEditButtonState()
+    }
+
+    @objc private func onChangeFlowMode(_ sender: Any?) {
+        let idx = flowModePopup.indexOfSelectedItem
+        guard FlowModeStore.shared.flowModes.indices.contains(idx) else { return }
+        currentFlowModeIndex = idx
+        updateFlowModeEditButtonState()
+        // Selection hook — wire to whatever consumes the active FlowMode.
+    }
+
+    /// 첫 번째(디폴트) 모드는 이름 변경/삭제가 불가능하므로 편집 버튼 자체를
+    /// 비활성화한다.
+    private func updateFlowModeEditButtonState() {
+        flowModeEditButton?.isEnabled = currentFlowModeIndex != 0
+    }
+
+    @objc private func onAddFlowMode(_ sender: Any?) {
+        let store = FlowModeStore.shared
+        let baseName = store.flowModes.indices.contains(currentFlowModeIndex)
+            ? store.flowModes[currentFlowModeIndex].name
+            : "Mode"
+        let newName = "New \(baseName)"
+        store.add(FlowMode(name: newName))
+        currentFlowModeIndex = store.flowModes.count - 1
+        refreshFlowModePopup()
+        AppLogger.shared.log("➕ 모드 추가: \(newName)")
+    }
+
+    /// Rename / delete dialog for the currently-selected FlowMode. Mirrors
+    /// `showScenarioEditPopover()`.
+    @objc private func showFlowModeEditPopover() {
+        let store = FlowModeStore.shared
+        guard store.flowModes.indices.contains(currentFlowModeIndex) else { return }
+        let current = store.flowModes[currentFlowModeIndex]
+
+        let alert = NSAlert()
+        alert.messageText = "모드 편집"
+        alert.informativeText = "이름을 변경하거나 모드를 삭제할 수 있습니다."
+
+        let input = NSTextField(string: current.name)
+        input.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        alert.accessoryView = input
+
+        alert.addButton(withTitle: "확인")
+        alert.addButton(withTitle: "취소")
+        // 마지막 남은 모드는 삭제할 수 없으므로 버튼 자체를 노출하지 않는다.
+        let canDelete = store.flowModes.count > 1
+        if canDelete {
+            alert.addButton(withTitle: "삭제")
+        }
+
+        let response = alert.runModal()
+        switch response {
+        case .alertFirstButtonReturn:
+            let trimmed = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                  trimmed != current.name else { return }
+            store.rename(at: currentFlowModeIndex, to: trimmed)
+            refreshFlowModePopup()
+        case .alertThirdButtonReturn where canDelete:
+            onDeleteFlowMode()
+        default:
+            break
+        }
+    }
+
+    @objc private func onDeleteFlowMode() {
+        let store = FlowModeStore.shared
+        guard store.flowModes.count > 1 else {
+            AppLogger.shared.log("⚠️ 마지막 모드는 삭제할 수 없습니다.")
+            return
+        }
+        guard store.flowModes.indices.contains(currentFlowModeIndex) else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "모드를 삭제하시겠습니까?"
+        alert.informativeText = store.flowModes[currentFlowModeIndex].name
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "삭제")
+        alert.addButton(withTitle: "취소")
+        if alert.runModal() == .alertFirstButtonReturn {
+            let removedName = store.flowModes[currentFlowModeIndex].name
+            store.delete(at: currentFlowModeIndex)
+            currentFlowModeIndex = max(0, currentFlowModeIndex - 1)
+            refreshFlowModePopup()
+            AppLogger.shared.log("🗑 모드 삭제: \(removedName)")
         }
     }
 
@@ -1169,7 +1352,7 @@ class ViewController: NSViewController {
             // ("🆕  새창", .openChrome(url: "")),
             (L("🌐🪟  Browser"), .openBrowser(url: "")),
             (L("🪟  Window Frame"), .windowFrame),
-            (L("➡️  Next Flow"), .nextScenario),
+            (L("➡️  Go to Flow"), .nextScenario),
             (L("🤖  AI Generate"), .aiGen),
         ]
         for (label, type) in types {
@@ -1197,7 +1380,7 @@ class ViewController: NSViewController {
             (L("📝  Script"), .script(code: "")),
             (L("🌐🪟  Browser"), .openBrowser(url: "")),
             (L("🪟  Window Frame"), .windowFrame),
-            (L("➡️  Next Flow"), .nextScenario),
+            (L("➡️  Go to Flow"), .nextScenario),
             (L("🤖  AI Generate"), .aiGen),
         ]
         return types.map { (label, type) in
@@ -1341,7 +1524,7 @@ class ViewController: NSViewController {
         case .openChrome:             name = "새창"
         case .openBrowser:            name = "브라우저"; delay = max(0.3, userDefault)
         case .windowFrame:            name = "창프레임"
-        case .nextScenario:           name = "다음 플로우"
+        case .nextScenario:           name = "플로우 이동"
         case .aiGen:                  name = "AI 생성"; delay = max(0.3, userDefault); count = 400
         }
         return AutoAction(type: type, group: group, name: "New " + name,
@@ -1456,6 +1639,14 @@ class ViewController: NSViewController {
             runner.currentScenarioId = store.scenarios[currentScenarioIndex].id.uuidString
         } else {
             runner.currentScenarioId = nil
+        }
+        // Pin the active FlowMode for the duration of this run so
+        // `.nextScenario` actions can pick a per-mode target.
+        let modes = FlowModeStore.shared.flowModes
+        if modes.indices.contains(currentFlowModeIndex) {
+            runner.currentFlowModeId = modes[currentFlowModeIndex].id.uuidString
+        } else {
+            runner.currentFlowModeId = nil
         }
         self.task = Task { [weak self] in
             guard let self = self else { return }

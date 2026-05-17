@@ -748,3 +748,105 @@ extension AutoAction {
         text.onNext(encoded)
     }
 }
+
+// MARK: - .nextScenario per-FlowMode targets
+
+/// Per-FlowMode target encoding stored in `action.text` for `.nextScenario`.
+///
+/// New format: `modeId1=targetId1|modeId2=targetId2|...` where each
+/// `targetId` is either empty ("next in list") or a Scenario UUID.
+///
+/// Legacy format (bare value with no `=`): a single scenario UUID — or
+/// empty — applying to every mode. Resolved at runtime as the default
+/// mode's target so existing actions keep working without migration; the
+/// first explicit write through `setNextScenarioTarget` preserves it as
+/// the default mode's entry and then drops it.
+struct NextScenarioPayload {
+    /// modeId → targetId map. `""` means "next in list" for that mode.
+    var targets: [String: String] = [:]
+    /// Bare legacy value (text contained no `=`). `nil` once the explicit
+    /// map is populated.
+    var legacyTarget: String?
+
+    static func parse(_ raw: String) -> NextScenarioPayload {
+        var p = NextScenarioPayload()
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return p }
+        if !trimmed.contains("=") {
+            p.legacyTarget = trimmed
+            return p
+        }
+        for pair in trimmed.split(separator: "|", omittingEmptySubsequences: false) {
+            let parts = pair.split(separator: "=", maxSplits: 1,
+                                   omittingEmptySubsequences: false)
+            let modeId = String(parts[0])
+            guard !modeId.isEmpty else { continue }
+            let target = parts.count >= 2 ? String(parts[1]) : ""
+            p.targets[modeId] = target
+        }
+        return p
+    }
+
+    func encode() -> String {
+        if !targets.isEmpty {
+            // Stable key order so re-saving an unchanged action doesn't
+            // churn the file.
+            return targets.keys.sorted()
+                .map { "\($0)=\(targets[$0] ?? "")" }
+                .joined(separator: "|")
+        }
+        return legacyTarget ?? ""
+    }
+}
+
+extension AutoAction {
+    var nextScenarioPayload: NextScenarioPayload {
+        NextScenarioPayload.parse((try? text.value()) ?? "")
+    }
+
+    /// Resolve the target scenario id for the running flow mode. Returns
+    /// `""` meaning "next in list" when no specific target applies.
+    /// Fallback chain: current-mode override → default-mode entry →
+    /// legacy bare value → `""`.
+    func nextScenarioTarget(forCurrentModeId currentModeId: String?,
+                            defaultModeId: String?) -> String {
+        let p = nextScenarioPayload
+        if let id = currentModeId, let target = p.targets[id] {
+            return target
+        }
+        if let id = defaultModeId, let target = p.targets[id] {
+            return target
+        }
+        return p.legacyTarget ?? ""
+    }
+
+    /// Explicit per-mode target, or `nil` when no override is set (caller
+    /// should treat as "use default").
+    func nextScenarioExplicitTarget(forModeId modeId: String) -> String? {
+        nextScenarioPayload.targets[modeId]
+    }
+
+    /// Set the target for a specific mode. Pass `nil` to remove the
+    /// override so the mode falls back to the default. `defaultModeId`
+    /// is used during legacy migration: the legacy bare value becomes
+    /// the default mode's explicit entry before being dropped.
+    func setNextScenarioTarget(_ target: String?,
+                               forModeId modeId: String,
+                               defaultModeId: String?) {
+        var p = nextScenarioPayload
+        // Preserve legacy by promoting it into the default mode's slot
+        // before we start writing the explicit map — otherwise a non-
+        // default-mode edit would silently lose the legacy fallback.
+        if let legacy = p.legacyTarget, p.targets.isEmpty,
+           let defId = defaultModeId, modeId != defId {
+            p.targets[defId] = legacy
+        }
+        if let target = target {
+            p.targets[modeId] = target
+        } else {
+            p.targets.removeValue(forKey: modeId)
+        }
+        if !p.targets.isEmpty { p.legacyTarget = nil }
+        text.onNext(p.encode())
+    }
+}
