@@ -3,3 +3,4 @@ Pods
 AIMacro/Pods
 **/xcuserdata/
 .DS_Store
+.claude/
