@@ -274,7 +274,7 @@ final class SequenceRecorder {
                            button: ClickButton,
                            modifiers: NSEvent.ModifierFlags) {
         let action = AutoAction(type: .click,
-                                name: "New 클릭",
+                                name: "클릭",
                                 point: point,
                                 delay: nextDelay(),
                                 count: 1,
@@ -292,7 +292,7 @@ final class SequenceRecorder {
 
     private func emitDrag(start: CGPoint, waypoints: [DragWaypoint]) {
         let action = AutoAction(type: .drag,
-                                name: "New 드래그",
+                                name: "드래그",
                                 point: start,
                                 delay: nextDelay(),
                                 count: 1,
@@ -321,7 +321,7 @@ final class SequenceRecorder {
         }
         let ticks = max(1, Int(ceil(magnitude / 3)))
         let action = AutoAction(type: .scroll,
-                                name: "New 스크롤",
+                                name: "스크롤",
                                 point: point,
                                 delay: nextDelay(),
                                 count: ticks,

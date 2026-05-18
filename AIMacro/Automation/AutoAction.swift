@@ -751,19 +751,31 @@ extension AutoAction {
 
 // MARK: - .nextScenario per-FlowMode targets
 
-/// Per-FlowMode target encoding stored in `action.text` for `.nextScenario`.
+/// Per-FlowMode target + delay encoding stored in `action.text` for
+/// `.nextScenario`.
 ///
-/// New format: `modeId1=targetId1|modeId2=targetId2|...` where each
+/// New format: `|`-separated entries where each entry is one of
+/// - `modeId=targetId`            — target only
+/// - `modeId=targetId@delay`      — target + per-mode delay override
+/// - `modeId@delay`               — delay override only (target falls
+///                                  back to the default mode's entry)
+///
 /// `targetId` is either empty ("next in list") or a Scenario UUID.
+/// `delay` is seconds, encoded as a base-10 double. Mode UUIDs and
+/// scenario UUIDs never contain `@`, so the separator is unambiguous.
 ///
-/// Legacy format (bare value with no `=`): a single scenario UUID — or
-/// empty — applying to every mode. Resolved at runtime as the default
-/// mode's target so existing actions keep working without migration; the
-/// first explicit write through `setNextScenarioTarget` preserves it as
-/// the default mode's entry and then drops it.
+/// Legacy format (whole string has no `=` and no `@`): a single
+/// scenario UUID — or empty — applying to every mode. Resolved at
+/// runtime as the default mode's target so existing actions keep
+/// working without migration; the first explicit write through
+/// `setNextScenarioTarget` / `setNextScenarioDelay` preserves it as the
+/// default mode's entry and then drops it.
 struct NextScenarioPayload {
     /// modeId → targetId map. `""` means "next in list" for that mode.
     var targets: [String: String] = [:]
+    /// modeId → delay-override (seconds) map. Absence means the mode
+    /// inherits `action.delay`.
+    var delays: [String: Double] = [:]
     /// Bare legacy value (text contained no `=`). `nil` once the explicit
     /// map is populated.
     var legacyTarget: String?
@@ -772,28 +784,56 @@ struct NextScenarioPayload {
         var p = NextScenarioPayload()
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return p }
-        if !trimmed.contains("=") {
+        if !trimmed.contains("=") && !trimmed.contains("@") {
             p.legacyTarget = trimmed
             return p
         }
         for pair in trimmed.split(separator: "|", omittingEmptySubsequences: false) {
-            let parts = pair.split(separator: "=", maxSplits: 1,
-                                   omittingEmptySubsequences: false)
-            let modeId = String(parts[0])
-            guard !modeId.isEmpty else { continue }
-            let target = parts.count >= 2 ? String(parts[1]) : ""
-            p.targets[modeId] = target
+            let s = String(pair)
+            if s.contains("=") {
+                // target entry (optionally with @delay)
+                let eqParts = s.split(separator: "=", maxSplits: 1,
+                                      omittingEmptySubsequences: false)
+                let modeId = String(eqParts[0])
+                guard !modeId.isEmpty else { continue }
+                let rhs = eqParts.count >= 2 ? String(eqParts[1]) : ""
+                let atParts = rhs.split(separator: "@", maxSplits: 1,
+                                        omittingEmptySubsequences: false)
+                p.targets[modeId] = String(atParts[0])
+                if atParts.count >= 2, let d = Double(atParts[1]) {
+                    p.delays[modeId] = d
+                }
+            } else if s.contains("@") {
+                // delay-only entry
+                let atParts = s.split(separator: "@", maxSplits: 1,
+                                      omittingEmptySubsequences: false)
+                let modeId = String(atParts[0])
+                guard !modeId.isEmpty, atParts.count >= 2 else { continue }
+                if let d = Double(atParts[1]) {
+                    p.delays[modeId] = d
+                }
+            }
         }
         return p
     }
 
     func encode() -> String {
-        if !targets.isEmpty {
+        if !targets.isEmpty || !delays.isEmpty {
             // Stable key order so re-saving an unchanged action doesn't
             // churn the file.
-            return targets.keys.sorted()
-                .map { "\($0)=\(targets[$0] ?? "")" }
-                .joined(separator: "|")
+            let keys = Set(targets.keys).union(delays.keys).sorted()
+            return keys.compactMap { key -> String? in
+                let hasTarget = targets[key] != nil
+                let delaySuffix: String = {
+                    guard let d = delays[key] else { return "" }
+                    return "@\(String(format: "%g", d))"
+                }()
+                if hasTarget {
+                    return "\(key)=\(targets[key] ?? "")\(delaySuffix)"
+                }
+                // delay-only entry
+                return delaySuffix.isEmpty ? nil : "\(key)\(delaySuffix)"
+            }.joined(separator: "|")
         }
         return legacyTarget ?? ""
     }
@@ -846,7 +886,51 @@ extension AutoAction {
         } else {
             p.targets.removeValue(forKey: modeId)
         }
-        if !p.targets.isEmpty { p.legacyTarget = nil }
+        if !p.targets.isEmpty || !p.delays.isEmpty { p.legacyTarget = nil }
+        text.onNext(p.encode())
+    }
+
+    /// Resolve the delay (seconds) override for the running flow mode.
+    /// Returns `nil` when no override applies — caller falls back to
+    /// `action.delay`. Fallback chain matches `nextScenarioTarget`:
+    /// current-mode override → default-mode entry → `nil`.
+    func nextScenarioDelay(forCurrentModeId currentModeId: String?,
+                           defaultModeId: String?) -> Double? {
+        let p = nextScenarioPayload
+        if let id = currentModeId, let d = p.delays[id] {
+            return d
+        }
+        if let id = defaultModeId, let d = p.delays[id] {
+            return d
+        }
+        return nil
+    }
+
+    /// Explicit per-mode delay override, or `nil` when not set (caller
+    /// should treat as "use action.delay").
+    func nextScenarioExplicitDelay(forModeId modeId: String) -> Double? {
+        nextScenarioPayload.delays[modeId]
+    }
+
+    /// Set the delay override for a specific mode. Pass `nil` to remove
+    /// the override so the mode inherits `action.delay`.
+    func setNextScenarioDelay(_ delay: Double?,
+                              forModeId modeId: String,
+                              defaultModeId: String?) {
+        var p = nextScenarioPayload
+        // Same legacy promotion as setNextScenarioTarget: if there is a
+        // legacy bare target and the explicit map is empty, write the
+        // legacy as the default mode's target before we start mutating.
+        if let legacy = p.legacyTarget, p.targets.isEmpty,
+           let defId = defaultModeId, modeId != defId {
+            p.targets[defId] = legacy
+        }
+        if let delay = delay {
+            p.delays[modeId] = delay
+        } else {
+            p.delays.removeValue(forKey: modeId)
+        }
+        if !p.targets.isEmpty || !p.delays.isEmpty { p.legacyTarget = nil }
         text.onNext(p.encode())
     }
 }

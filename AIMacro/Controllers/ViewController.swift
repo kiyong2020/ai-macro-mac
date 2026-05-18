@@ -783,6 +783,47 @@ class ViewController: NSViewController {
             stack.topAnchor.constraint(equalTo: groupTab.topAnchor),
             scenarioPopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
         ])
+
+        // Cross-Runner sync: any window's add/rename/delete/duplicate calls
+        // ScenarioStore.save() which posts this notification. Other Runners
+        // must rebuild their popup immediately so the pulldown reflects the
+        // current list across windows.
+        NotificationCenter.default.addObserver(
+            forName: ScenarioStore.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleScenarioStoreChange()
+        }
+    }
+
+    /// React to a scenario list mutation that may have originated from a
+    /// different Runner window. Re-resolve the displayed scenario by UUID
+    /// (its index can shift when entries are added/removed), refresh the
+    /// popup, and reload the scenario only if the one we were showing was
+    /// deleted elsewhere.
+    private func handleScenarioStoreChange() {
+        guard scenarioPopup != nil else { return }
+        let store = ScenarioStore.shared
+        let displayedId = currentScenarioIdString()
+
+        let stillExists: Bool
+        if let id = displayedId,
+           let idx = store.scenarios.firstIndex(where: { $0.id.uuidString == id }) {
+            currentScenarioIndex = idx
+            stillExists = true
+        } else {
+            currentScenarioIndex = min(currentScenarioIndex, max(0, store.scenarios.count - 1))
+            stillExists = false
+        }
+
+        refreshScenarioPopup()
+
+        if !stillExists {
+            persistCurrentScenarioSelection()
+            loadCurrentScenario()
+            undoCoordinator.resetBaseline()
+        }
     }
 
     /// Replace the storyboard "설정" text button with a gear SF Symbol so
@@ -1518,7 +1559,7 @@ class ViewController: NSViewController {
             case .enter: name = "엔터대기"
             case .time:  name = "시간대기"; text = "09:00:00"
             }
-        case .ocr:                    name = "OCR"; delay = max(0.5, userDefault); count = 200
+        case .ocr:                    name = "글자인식 클릭"; delay = max(0.5, userDefault); count = 200
         case .script:                 name = "스크립트"
         case .setURL:                 name = "URL설정"
         case .openChrome:             name = "새창"
@@ -1527,8 +1568,21 @@ class ViewController: NSViewController {
         case .nextScenario:           name = "플로우 이동"
         case .aiGen:                  name = "AI 생성"; delay = max(0.3, userDefault); count = 400
         }
-        return AutoAction(type: type, group: group, name: "New " + name,
-                          point: .zero, delay: delay, count: count, text: text)
+        let action = AutoAction(type: type, group: group, name: name,
+                                point: .zero, delay: delay, count: count, text: text)
+        // `.nextScenario` ignores `action.delay` at runtime — its per-
+        // FlowMode delay map is the source of truth. Seed each existing
+        // FlowMode with the user's configured default so the edit screen
+        // doesn't show empty (zero) rows for a fresh action.
+        if case .nextScenario = type, userDefault > 0 {
+            let defId = FlowModeStore.shared.flowModes.first?.id.uuidString
+            for mode in FlowModeStore.shared.flowModes {
+                action.setNextScenarioDelay(userDefault,
+                                            forModeId: mode.id.uuidString,
+                                            defaultModeId: defId)
+            }
+        }
+        return action
     }
 
     @objc private func onDeleteScenario() {

@@ -320,8 +320,12 @@ final class ActionDetailBuilder {
 
     private func shouldShowDelay(for type: AutoAction.ActionType) -> Bool {
         switch type {
-        case .wait: return false
-        default:    return true
+        case .wait:         return false
+        // `.nextScenario` has its own per-FlowMode delay fields inside the
+        // Go to Flow card; the top-level Delay would be redundant and is
+        // not consulted by the runner for this action type.
+        case .nextScenario: return false
+        default:            return true
         }
     }
 
@@ -405,6 +409,10 @@ final class ActionDetailBuilder {
     /// (first) mode shows `[Next in list, scenario1, ...]`; non-default
     /// modes prepend a `Use default` option that clears the per-mode
     /// override so they fall back to the default mode's target.
+    ///
+    /// Each row also gets a per-mode delay field. Blank means "inherit
+    /// the top-level Delay"; a number overrides the runner's leading
+    /// wait when this FlowMode is the running mode.
     private func addNextScenarioRows(to card: CardView,
                                      action: AutoAction,
                                      disposeBag: DisposeBag) {
@@ -419,10 +427,21 @@ final class ActionDetailBuilder {
                 isDefaultMode: isDefault,
                 disposeBag: disposeBag
             )
+            let delayField = makeNextScenarioDelayField(
+                action: action,
+                modeId: mode.id.uuidString,
+                defaultModeId: defaultModeId,
+                isDefaultMode: isDefault,
+                disposeBag: disposeBag
+            )
+            let row = NSStackView(views: [popup, delayField])
+            row.orientation = .horizontal
+            row.alignment = .firstBaseline
+            row.spacing = 10
             let hint = isDefault
                 ? L("Stops the current flow and starts the next one in the list.")
                 : nil
-            card.addRow(label: mode.name, control: popup, hint: hint)
+            card.addRow(label: mode.name, control: row, hint: hint)
         }
     }
 
@@ -454,6 +473,69 @@ final class ActionDetailBuilder {
             .subscribe(onNext: { [weak bridge] _ in bridge?.repopulate() })
             .disposed(by: disposeBag)
         return popup
+    }
+
+    /// `[ TextField | "초" ]` delay input for one FlowMode row in the Go
+    /// to Flow card.
+    /// - Default mode row: empty == 0s (this row is the base for the
+    ///   action since the top-level Delay is hidden for `.nextScenario`).
+    /// - Non-default mode rows: empty == inherit the default mode's
+    ///   delay. The placeholder reflects that fallback so users can see
+    ///   the inherited value without opening the default mode row.
+    private func makeNextScenarioDelayField(action: AutoAction,
+                                            modeId: String,
+                                            defaultModeId: String,
+                                            isDefaultMode: Bool,
+                                            disposeBag: DisposeBag) -> NSView {
+        let field = NSTextField(string: "")
+        field.bezelStyle = .roundedBezel
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        if let d = action.nextScenarioExplicitDelay(forModeId: modeId) {
+            field.stringValue = String(format: "%g", d)
+        }
+
+        func refreshPlaceholder() {
+            if isDefaultMode {
+                field.placeholderString = "0"
+            } else {
+                let inherited = action.nextScenarioExplicitDelay(forModeId: defaultModeId) ?? 0
+                field.placeholderString = String(format: "%g", inherited)
+            }
+        }
+        refreshPlaceholder()
+
+        field.delegate = TextFieldChangeDelegate.attach(to: field) { [weak action] new in
+            let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                action?.setNextScenarioDelay(nil,
+                                             forModeId: modeId,
+                                             defaultModeId: defaultModeId)
+            } else if let v = Double(trimmed) {
+                action?.setNextScenarioDelay(max(0, v),
+                                             forModeId: modeId,
+                                             defaultModeId: defaultModeId)
+            }
+        }
+
+        // Non-default rows reflect changes to the default mode's delay in
+        // their placeholder so users always see what they're inheriting.
+        if !isDefaultMode {
+            action.text
+                .observe(on: MainScheduler.instance)
+                .subscribe(onNext: { _ in refreshPlaceholder() })
+                .disposed(by: disposeBag)
+        }
+
+        let unit = NSTextField(labelWithString: "초")
+        unit.font = .systemFont(ofSize: 11)
+        unit.textColor = .tertiaryLabelColor
+
+        let row = NSStackView(views: [field, unit])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 6
+        return row
     }
 
     private static var nextScenarioBridgeAssocKey: UInt8 = 0

@@ -161,7 +161,21 @@ final class AutomationRunner {
         // Delay is now applied BEFORE the action runs (was AFTER previously).
         // Each action.delay represents the wait time *leading up to* the
         // action's execution.
-        let baseMs = Int(try! action.delay.value() * 1000)
+        //
+        // `.nextScenario` uses its own per-FlowMode delay map (current-
+        // mode override → default-mode entry → 0). The action's common
+        // `delay` is intentionally ignored here so the UI can hide it
+        // for this action type.
+        let baseSeconds: Double = {
+            if case .nextScenario = action.type {
+                let defId = FlowModeStore.shared.flowModes.first?.id.uuidString
+                return action.nextScenarioDelay(
+                    forCurrentModeId: currentFlowModeId,
+                    defaultModeId: defId) ?? 0
+            }
+            return (try? action.delay.value()) ?? 0
+        }()
+        let baseMs = Int(baseSeconds * 1000)
         // Optional human-like jitter on top of the configured delay.
         let maxExtra = max(0, Preferences.maxRandomDelay)
         let extraMs = maxExtra > 0 ? Int(Double.random(in: 0...maxExtra) * 1000) : 0
@@ -532,9 +546,16 @@ final class AutomationRunner {
         )
 
         var done = false
+        // recognizeText completes on a global queue and several frames may
+        // be in flight at once. Without a lock all completions can pass
+        // `!done` simultaneously and each fire a click. The lock serializes
+        // the check+set so exactly one match wins, and lets us suppress the
+        // "OCR 스캔" log and debug-window update the moment that winner has
+        // committed — scanning stops the instant we've clicked once.
+        let doneLock = NSLock()
         mouseListener.onMouseDown = { [weak self] _, _ in
             self?.mouseListener.stop()
-            done = true
+            doneLock.lock(); done = true; doneLock.unlock()
         }
         mouseListener.start()
 
@@ -581,14 +602,15 @@ final class AutomationRunner {
             // Register the target as a custom word so Vision prefers it over
             // visually similar Hangul (e.g. 약 vs 악, 예 vs 얘).
             recognizeText(from: cgImg, customWords: [text]) { results in
+                // Bail before logging/updating if the winner already committed,
+                // so no further "OCR 스캔" output leaks past the click.
+                doneLock.lock()
+                let alreadyDone = done
+                doneLock.unlock()
+                if alreadyDone { return }
                 let scanned = results.compactMap { $0.0 }.joined(separator: " | ")
                 AppLogger.shared.log("OCR 스캔: [\(scanned)]")
                 OCRDebugWindow.shared.update(image: img, results: results, target: text)
-                // recognizeText is async — multiple frames may have queued OCR jobs
-                // before the first one completes. Guard against duplicate firings,
-                // otherwise several click() tasks run in parallel and fight over
-                // simulateMouseMove's shared lastSimulatedPosition.
-                guard !done else { return }
                 // Hangul-aware fuzzy contains: tolerates one syllable that
                 // differs by a single 초/중/종성 — covers OCR misreads like
                 // "예약하기" vs "예악하기" without matching unrelated text.
@@ -596,7 +618,12 @@ final class AutomationRunner {
                     let scanned = ($0.0 ?? "").replacingOccurrences(of: " ", with: "")
                     return fuzzyHangulContains(scanned, target: text)
                 }) else { return }
-                done = true
+                // Atomically claim the win — only the first matcher proceeds.
+                doneLock.lock()
+                let claimed = !done
+                if claimed { done = true }
+                doneLock.unlock()
+                guard claimed else { return }
                 capturer.stop()
                 let clickPoint = CGPoint(
                     x: quartzOriginX + result.1.midX / bufScale,

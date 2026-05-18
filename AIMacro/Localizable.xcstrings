@@ -208,7 +208,7 @@
     "OCR Click" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "OCR 클릭" } }
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "글자인식 클릭" } }
       }
     },
     "OCR Search" : {
