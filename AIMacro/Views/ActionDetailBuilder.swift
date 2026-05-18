@@ -359,20 +359,48 @@ final class ActionDetailBuilder {
         let field = NSTextField(string: String(format: "%g", (try? action.delay.value()) ?? 0))
         field.bezelStyle = .roundedBezel
         field.translatesAutoresizingMaskIntoConstraints = false
-        field.widthAnchor.constraint(equalToConstant: 110).isActive = true
-        field.delegate = TextFieldChangeDelegate.attach(to: field) { [weak action] new in
-            action?.delay.onNext(Double(new) ?? 0)
-        }
-        let unit = NSTextField(labelWithString: "초")
-        unit.font = .systemFont(ofSize: 11)
-        unit.textColor = .tertiaryLabelColor
+        field.widthAnchor.constraint(equalToConstant: 90).isActive = true
 
-        let row = NSStackView(views: [field, unit])
+        // 초 / 분 unit picker. Stored value on `action.delay` is always in
+        // seconds — the popup only changes how the field renders/parses.
+        // On unit change we rewrite the field with the same stored value
+        // expressed in the new unit (e.g. 60s shown as "1" when "분").
+        let unitPopup = makeDelayUnitPopup { [weak action, weak field] factor in
+            guard let field = field else { return }
+            let secs = (try? action?.delay.value()) ?? 0
+            field.stringValue = String(format: "%g", secs / factor)
+        }
+
+        field.delegate = TextFieldChangeDelegate.attach(to: field) { [weak action] new in
+            let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
+            let display = Double(trimmed) ?? 0
+            let factor: Double = unitPopup.indexOfSelectedItem == 0 ? 1.0 : 60.0
+            action?.delay.onNext(max(0, display * factor))
+        }
+
+        let row = NSStackView(views: [field, unitPopup])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 6
         return row
     }
+
+    /// `[ "초" | "분" ]` popup used by every delay input. The `onChange`
+    /// closure receives the new factor (1.0 for 초, 60.0 for 분); the
+    /// caller is responsible for re-rendering the associated field.
+    private func makeDelayUnitPopup(onChange: @escaping (Double) -> Void) -> NSPopUpButton {
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.addItems(withTitles: ["초", "분"])
+        popup.translatesAutoresizingMaskIntoConstraints = false
+        let bridge = DelayUnitBridge(onChange: onChange)
+        popup.target = bridge
+        popup.action = #selector(DelayUnitBridge.changed(_:))
+        objc_setAssociatedObject(popup, &Self.delayUnitBridgeAssocKey,
+                                 bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        return popup
+    }
+
+    private static var delayUnitBridgeAssocKey: UInt8 = 0
 
     private func makeCountField(_ action: AutoAction, disposeBag: DisposeBag, suffix: String) -> NSView {
         let field = NSTextField(string: String((try? action.count.value()) ?? 1))
@@ -475,13 +503,16 @@ final class ActionDetailBuilder {
         return popup
     }
 
-    /// `[ TextField | "초" ]` delay input for one FlowMode row in the Go
-    /// to Flow card.
+    /// `[ TextField | "초/분" popup ]` delay input for one FlowMode row in
+    /// the Go to Flow card.
     /// - Default mode row: empty == 0s (this row is the base for the
     ///   action since the top-level Delay is hidden for `.nextScenario`).
     /// - Non-default mode rows: empty == inherit the default mode's
     ///   delay. The placeholder reflects that fallback so users can see
     ///   the inherited value without opening the default mode row.
+    ///
+    /// Stored values on the action are always in seconds; the unit popup
+    /// only affects how this field renders/parses.
     private func makeNextScenarioDelayField(action: AutoAction,
                                             modeId: String,
                                             defaultModeId: String,
@@ -495,24 +526,40 @@ final class ActionDetailBuilder {
             field.stringValue = String(format: "%g", d)
         }
 
+        let unitPopup = makeDelayUnitPopup { [weak action, weak field] factor in
+            guard let field = field else { return }
+            // Re-render the explicit value (if any) in the new unit.
+            if let d = action?.nextScenarioExplicitDelay(forModeId: modeId) {
+                field.stringValue = String(format: "%g", d / factor)
+            }
+            // Refresh placeholder for non-default rows so the inherited
+            // value matches the visible unit too.
+            if !isDefaultMode {
+                let inherited = action?.nextScenarioExplicitDelay(forModeId: defaultModeId) ?? 0
+                field.placeholderString = String(format: "%g", inherited / factor)
+            }
+        }
+
         func refreshPlaceholder() {
             if isDefaultMode {
                 field.placeholderString = "0"
             } else {
+                let factor: Double = unitPopup.indexOfSelectedItem == 0 ? 1.0 : 60.0
                 let inherited = action.nextScenarioExplicitDelay(forModeId: defaultModeId) ?? 0
-                field.placeholderString = String(format: "%g", inherited)
+                field.placeholderString = String(format: "%g", inherited / factor)
             }
         }
         refreshPlaceholder()
 
         field.delegate = TextFieldChangeDelegate.attach(to: field) { [weak action] new in
             let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
+            let factor: Double = unitPopup.indexOfSelectedItem == 0 ? 1.0 : 60.0
             if trimmed.isEmpty {
                 action?.setNextScenarioDelay(nil,
                                              forModeId: modeId,
                                              defaultModeId: defaultModeId)
             } else if let v = Double(trimmed) {
-                action?.setNextScenarioDelay(max(0, v),
+                action?.setNextScenarioDelay(max(0, v * factor),
                                              forModeId: modeId,
                                              defaultModeId: defaultModeId)
             }
@@ -527,11 +574,7 @@ final class ActionDetailBuilder {
                 .disposed(by: disposeBag)
         }
 
-        let unit = NSTextField(labelWithString: "초")
-        unit.font = .systemFont(ofSize: 11)
-        unit.textColor = .tertiaryLabelColor
-
-        let row = NSStackView(views: [field, unit])
+        let row = NSStackView(views: [field, unitPopup])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 6
@@ -2699,6 +2742,18 @@ private final class AreaSelectionView: NSView {
         } else {
             super.keyDown(with: event)
         }
+    }
+}
+
+/// Target/action bridge for the 초/분 unit popup used by delay fields.
+/// Holds the `onChange` closure so the popup can be wired up with the
+/// usual Cocoa `target:action:` pair without forcing the call site to
+/// subclass anything. Kept alive via an associated object on the popup.
+private final class DelayUnitBridge: NSObject {
+    private let onChange: (Double) -> Void
+    init(onChange: @escaping (Double) -> Void) { self.onChange = onChange }
+    @objc func changed(_ sender: NSPopUpButton) {
+        onChange(sender.indexOfSelectedItem == 0 ? 1.0 : 60.0)
     }
 }
 
