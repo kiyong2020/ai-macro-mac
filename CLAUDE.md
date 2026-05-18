@@ -18,7 +18,8 @@ xcodebuild -workspace AIMacro.xcworkspace \
 ```
 
 - Workspace: `AIMacro.xcworkspace`. Schemes: `AIMacro` and `AIMacro_debug`. Target/product: `AIMacro` / `AIMacro.app`. Bundle id: `com.minseyesoft.aimacro`.
-- Podfile pins `platform :osx, '12.0'` and a `post_install` hook forces every pod to MACOSX_DEPLOYMENT_TARGET=12.0 — necessary because RxSwift otherwise defaults to 10.9 and fails to compile against newer `Date`/`Data` APIs. Do not remove that hook.
+- Deployment target: AIMacro target is **macOS 14.6** (project-level default is 15.5). Code may freely use macOS 14 APIs (e.g. `SCScreenshotManager`). `CGWindowListCreateImage` is obsoleted in the macOS 15 SDK — do not introduce new calls; use `ActionDetailBuilder.captureRectAsync` for one-shot screenshots.
+- Podfile pins `platform :osx, '12.0'` and a `post_install` hook forces every pod to MACOSX_DEPLOYMENT_TARGET=12.0 — necessary because RxSwift otherwise defaults to 10.9 and fails to compile against newer `Date`/`Data` APIs. Do not remove that hook. (The 12.0 number applies only to pods; the app itself targets 14.6.)
 - The project was renamed from `GolfReservation` → `AIMacro` (target was previously `GolfReservation3`, productName was `MyApp`). If you find any lingering old references in code or config, those are oversights — clean them up.
 - No XCTest target exists. There is no test command.
 
@@ -38,7 +39,7 @@ At first launch the app requests three permissions (granted via System Settings,
 
 The app is a single `NSWindow` storyboard UI (`Base.lproj/Main.storyboard` → `ViewController`) that edits and runs lists of `AutoAction`s. The execution engine is decoupled from the UI.
 
-```
+```text
 AppDelegate
   ├─ requests permissions, wires status-bar item, connects SocketService
   └─ ViewController (Controllers/)

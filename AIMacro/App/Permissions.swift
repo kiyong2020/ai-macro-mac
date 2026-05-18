@@ -6,8 +6,7 @@
 //    1. Accessibility    — for CGEventTap (mouse + keyboard listeners,
 //                          synthesised clicks, AX-driven window control)
 //    2. Screen Recording — for ScreenCaptureKit (OCR + position-pick
-//                          snapshots) and CGWindowListCreateImage (drag
-//                          snapshot)
+//                          snapshots and one-shot drag/OCR snapshots)
 //    3. Apple Events      — for AppleScript-driven Chrome navigation
 //
 //  Two callers:

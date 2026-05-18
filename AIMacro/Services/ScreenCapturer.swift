@@ -201,6 +201,47 @@ class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 }
 
+extension ScreenCapturer {
+    /// One-shot off-main screenshot of a global-Quartz rect via
+    /// `SCScreenshotManager`. Returns nil on missing display, denied
+    /// permission, or any SC error. Safe to call from any thread —
+    /// internally awaits on the SC cooperative pool, so callers on the
+    /// main thread won't block (use the completion overload below to
+    /// receive the result back on main).
+    static func captureOnce(_ rect: CGRect) async -> CGImage? {
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(
+                false, onScreenWindowsOnly: true)
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            guard let display = content.displays.first(where: { $0.frame.contains(center) })
+                              ?? content.displays.first else { return nil }
+            let cfg = SCStreamConfiguration()
+            cfg.width = max(1, Int(rect.width))
+            cfg.height = max(1, Int(rect.height))
+            cfg.sourceRect = CGRect(x: rect.minX - display.frame.minX,
+                                    y: rect.minY - display.frame.minY,
+                                    width: rect.width, height: rect.height)
+            cfg.showsCursor = false
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            return try await SCScreenshotManager.captureImage(
+                contentFilter: filter, configuration: cfg)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Same as `captureOnce(_:)` but delivers the result on the main
+    /// thread. Use from main-thread (RunLoop) call sites that need to
+    /// touch UI state with the captured image.
+    static func captureOnce(_ rect: CGRect,
+                            completion: @escaping (CGImage?) -> Void) {
+        Task.detached(priority: .userInitiated) {
+            let img = await captureOnce(rect)
+            await MainActor.run { completion(img) }
+        }
+    }
+}
+
 func clampedRect(for rect: CGRect, in screen: NSScreen) -> CGRect {
     let screenFrame = screen.frame
 

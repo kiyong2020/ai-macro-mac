@@ -1564,10 +1564,15 @@ final class ActionDetailBuilder {
             // One-shot screenshot of the area covering start + waypoints,
             // overlaid with start/end markers. Replaces the start-point-only
             // live capture so long drags show both endpoints in context.
-            if let id = action?.id,
-               let img = ActionDetailBuilder.makeDragSnapshot(start: startPoint,
-                                                              waypoints: samples.map { $0.point }) {
-                OCRSnapshotStore.shared.save(img, actionId: id)
+            // Capture runs off the main thread; persist when it returns.
+            if let id = action?.id {
+                ActionDetailBuilder.makeDragSnapshot(
+                    start: startPoint,
+                    waypoints: samples.map { $0.point }) { img in
+                    if let img = img {
+                        OCRSnapshotStore.shared.save(img, actionId: id)
+                    }
+                }
             }
             teardown()
             AppLogger.shared.log("✋ 드래그 녹화 완료: 경로점 \(samples.count)개, \(tMs)ms (끝 \(Int(point.x)), \(Int(point.y)))")
@@ -1583,13 +1588,19 @@ final class ActionDetailBuilder {
     /// overlay a green start marker, a red end marker, and a yellow polyline
     /// connecting the path. Coords throughout are global Quartz (Y-down,
     /// origin top-left of the primary display) — same as what the recorder
-    /// captures from CGEventTap.
-    static func makeDragSnapshot(start: CGPoint, waypoints: [CGPoint]) -> NSImage? {
+    /// captures from CGEventTap. Async because the underlying capture must
+    /// run off the main thread; completion fires on main.
+    static func makeDragSnapshot(start: CGPoint,
+                                 waypoints: [CGPoint],
+                                 completion: @escaping (NSImage?) -> Void) {
         let allPoints = [start] + waypoints
         guard let minX = allPoints.map(\.x).min(),
               let maxX = allPoints.map(\.x).max(),
               let minY = allPoints.map(\.y).min(),
-              let maxY = allPoints.map(\.y).max() else { return nil }
+              let maxY = allPoints.map(\.y).max() else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
 
         let padding: CGFloat = 60
         let minSize: CGFloat = 200
@@ -1599,54 +1610,42 @@ final class ActionDetailBuilder {
         let cy = (minY + maxY) / 2
         let captureRect = CGRect(x: cx - w / 2, y: cy - h / 2, width: w, height: h)
 
-        // CGWindowListCreateImage is deprecated in macOS 14 but still
-        // functional and matches the app's macOS 12 deployment target. It
-        // returns nil if Screen Recording permission isn't granted — caller
-        // silently skips saving the snapshot in that case.
-        guard let cg = CGWindowListCreateImage(captureRect,
-                                               .optionOnScreenOnly,
-                                               kCGNullWindowID,
-                                               .nominalResolution) else {
-            return nil
-        }
+        ScreenCapturer.captureOnce(captureRect) { cg in
+            guard let cg = cg else { completion(nil); return }
 
-        let imageSize = NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height))
-        let base = NSImage(cgImage: cg, size: imageSize)
+            let imageSize = NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height))
+            let base = NSImage(cgImage: cg, size: imageSize)
 
-        // Quartz (Y-down) → image-local (Y-up). The drawing context inside
-        // lockFocus is Y-up by default.
-        func toImage(_ p: CGPoint) -> CGPoint {
-            CGPoint(x: p.x - captureRect.minX,
-                    y: imageSize.height - (p.y - captureRect.minY))
-        }
-
-        let composite = NSImage(size: imageSize)
-        composite.lockFocus()
-        defer { composite.unlockFocus() }
-
-        base.draw(in: CGRect(origin: .zero, size: imageSize))
-
-        // Path polyline (yellow translucent stroke).
-        if !waypoints.isEmpty {
-            let path = NSBezierPath()
-            path.move(to: toImage(start))
-            for wp in waypoints {
-                path.line(to: toImage(wp))
+            // Quartz (Y-down) → image-local (Y-up). The drawing context
+            // inside lockFocus is Y-up by default.
+            func toImage(_ p: CGPoint) -> CGPoint {
+                CGPoint(x: p.x - captureRect.minX,
+                        y: imageSize.height - (p.y - captureRect.minY))
             }
-            NSColor.systemYellow.withAlphaComponent(0.9).setStroke()
-            path.lineWidth = 3
-            path.stroke()
+
+            let composite = NSImage(size: imageSize)
+            composite.lockFocus()
+            base.draw(in: CGRect(origin: .zero, size: imageSize))
+
+            if !waypoints.isEmpty {
+                let path = NSBezierPath()
+                path.move(to: toImage(start))
+                for wp in waypoints {
+                    path.line(to: toImage(wp))
+                }
+                NSColor.systemYellow.withAlphaComponent(0.9).setStroke()
+                path.lineWidth = 3
+                path.stroke()
+            }
+
+            drawMarker(at: toImage(start), color: .systemGreen)
+            if let endPt = waypoints.last {
+                drawMarker(at: toImage(endPt), color: .systemRed)
+            }
+
+            composite.unlockFocus()
+            completion(composite)
         }
-
-        // Start marker (green dot + white outline).
-        drawMarker(at: toImage(start), color: .systemGreen)
-
-        // End marker (red dot + white outline) — last waypoint only.
-        if let endPt = waypoints.last {
-            drawMarker(at: toImage(endPt), color: .systemRed)
-        }
-
-        return composite
     }
 
     /// Filled circle with a white outline ring — used by `makeDragSnapshot`
@@ -1756,18 +1755,17 @@ final class ActionDetailBuilder {
             action.setOCRScanSize(width: w, height: h)
 
             // Capture a snapshot of the final selected area (matching the
-            // pattern in `makeDragSnapshot`). CGWindowListCreateImage is
-            // deprecated but still works for one-shot grabs on the supported
-            // macOS 12 baseline. Run on the next runloop tick so the
-            // overlays have actually been torn down before we capture —
-            // otherwise the dim layer ends up in the screenshot.
+            // pattern in `makeDragSnapshot`). Schedule the grab one
+            // runloop tick out so the overlays have actually been torn
+            // down before capture — otherwise the dim layer ends up in
+            // the screenshot. The capture itself runs off the main
+            // thread via `ScreenCapturer.captureOnce`.
             let snapRect = CGRect(x: center.x - CGFloat(w) / 2,
                                   y: center.y - CGFloat(h) / 2,
                                   width: CGFloat(w), height: CGFloat(h))
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                if let cg = CGWindowListCreateImage(
-                    snapRect, .optionOnScreenOnly,
-                    kCGNullWindowID, .nominalResolution) {
+                ScreenCapturer.captureOnce(snapRect) { cg in
+                    guard let cg = cg else { return }
                     let img = NSImage(cgImage: cg,
                                       size: NSSize(width: cg.width, height: cg.height))
                     OCRSnapshotStore.shared.save(img, actionId: action.id)

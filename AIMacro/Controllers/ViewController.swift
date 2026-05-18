@@ -754,21 +754,18 @@ class ViewController: NSViewController {
             return b
         }
 
-        // [+] popup [편집] — matches the redesign's scenario row. The
-        // settings button on the right is the storyboard's existing 설정
+        // popup [편집] — the + button moved into the editor popup itself.
+        // The settings button on the right is the storyboard's existing 설정
         // button, already wired to `onSettings:`.
-        let addBtn = smallButton("＋", #selector(onAddScenario(_:)))
-        addBtn.toolTip = L("Add flow")
-
         scenarioPopup = NSPopUpButton(frame: .zero, pullsDown: false)
         scenarioPopup.target = self
         scenarioPopup.action = #selector(onChangeScenario(_:))
         scenarioPopup.translatesAutoresizingMaskIntoConstraints = false
 
         scenarioEditButton = smallButton("편집", #selector(showScenarioEditPopover))
-        scenarioEditButton.toolTip = L("Rename / delete flow")
+        scenarioEditButton.toolTip = L("Manage flows")
 
-        let stack = NSStackView(views: [addBtn, scenarioPopup, scenarioEditButton])
+        let stack = NSStackView(views: [scenarioPopup, scenarioEditButton])
         stack.orientation = .horizontal
         stack.spacing = 6
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -1088,49 +1085,6 @@ class ViewController: NSViewController {
         onScenarioSelectionChanged?()
     }
 
-    @objc private func onAddScenario(_ sender: Any?) {
-        // Already recording — clicking + again just no-ops; the HUD already
-        // tells the user how to finish.
-        if sequenceRecorder != nil {
-            AppLogger.shared.log("⚠️ 시퀀스 녹화 중 — ESC 로 먼저 종료하세요.")
-            return
-        }
-
-        let menu = NSMenu()
-        // Honor explicit isEnabled values below instead of asking the
-        // responder chain via validateMenuItem(_:).
-        menu.autoenablesItems = false
-
-        let empty = NSMenuItem(title: "빈 플로우 생성",
-                               action: #selector(addEmptyScenario(_:)),
-                               keyEquivalent: "")
-        empty.target = self
-        menu.addItem(empty)
-
-        let duplicate = NSMenuItem(title: "현재 플로우 복제",
-                                   action: #selector(duplicateCurrentScenario(_:)),
-                                   keyEquivalent: "")
-        duplicate.target = self
-        // Greyed out when there's no scenario to copy.
-        duplicate.isEnabled = ScenarioStore.shared.scenarios.indices.contains(currentScenarioIndex)
-        menu.addItem(duplicate)
-
-        let record = NSMenuItem(title: "시퀀스로 기록",
-                                action: #selector(beginSequenceRecording(_:)),
-                                keyEquivalent: "")
-        record.target = self
-        menu.addItem(record)
-
-        if let button = sender as? NSView {
-            // Drop the menu just below the + button so the popup feels
-            // anchored to it.
-            let origin = NSPoint(x: 0, y: button.bounds.height + 4)
-            menu.popUp(positioning: nil, at: origin, in: button)
-        } else if let event = NSApp.currentEvent, let view = self.view as NSView? {
-            NSMenu.popUpContextMenu(menu, with: event, for: view)
-        }
-    }
-
     @objc private func addEmptyScenario(_ sender: Any?) {
         let store = ScenarioStore.shared
         let baseName = store.scenarios.indices.contains(currentScenarioIndex)
@@ -1285,44 +1239,39 @@ class ViewController: NSViewController {
         recordingHUD = nil
     }
 
-    /// Modal dialog with a name text field and three buttons: 확인 / 취소 /
-    /// 삭제. Replaces the previous NSPopover, which had focus / dismissal
-    /// quirks.
-    @objc private func showScenarioEditPopover() {
-        let store = ScenarioStore.shared
-        guard store.scenarios.indices.contains(currentScenarioIndex) else { return }
-        let current = store.scenarios[currentScenarioIndex]
-
-        let alert = NSAlert()
-        alert.messageText = "플로우 편집"
-        alert.informativeText = "이름을 변경하거나 플로우를 삭제할 수 있습니다."
-
-        let input = NSTextField(string: current.name)
-        input.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
-        alert.accessoryView = input
-
-        // Order matters — first button is the default (Return), second is
-        // Cancel (Escape), the third is destructive.
-        alert.addButton(withTitle: "확인")
-        alert.addButton(withTitle: "취소")
-        alert.addButton(withTitle: "삭제")
-
-        let response = alert.runModal()
-        switch response {
-        case .alertFirstButtonReturn:
-            let trimmed = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty,
-                  trimmed != current.name else { return }
-            store.rename(at: currentScenarioIndex, to: trimmed)
-            refreshScenarioPopup()
-            onScenarioSelectionChanged?()
-            undoCoordinator.captureIfChanged()
-        case .alertThirdButtonReturn:
-            // Reuses the existing destructive-confirm flow.
-            onDeleteScenario()
-        default:
-            break   // 취소
+    /// Lazy-instantiated manager window: left list of every scenario with
+    /// drag-to-reorder + a [+] menu, right pane editing the selected
+    /// scenario's name with a 삭제 button.
+    private lazy var scenarioListEditor: ScenarioListEditorWindowController = {
+        let editor = ScenarioListEditorWindowController()
+        editor.onBeginSequenceRecording = { [weak self] in
+            self?.beginSequenceRecording(nil)
         }
+        editor.onMutated = { [weak self] in
+            self?.undoCoordinator.captureIfChanged()
+        }
+        editor.onScenarioSelected = { [weak self] scenarioId in
+            self?.selectScenario(byId: scenarioId)
+        }
+        return editor
+    }()
+
+    @objc private func showScenarioEditPopover() {
+        scenarioListEditor.present(selectedScenarioIndex: currentScenarioIndex)
+    }
+
+    /// Re-point the picker + currently-loaded scenario at the scenario with
+    /// the given UUID. Invoked from the manager window when the user picks a
+    /// row there so the main view tracks the editor's selection.
+    private func selectScenario(byId id: UUID) {
+        let store = ScenarioStore.shared
+        guard let idx = store.scenarios.firstIndex(where: { $0.id == id }) else { return }
+        guard idx != currentScenarioIndex else { return }
+        currentScenarioIndex = idx
+        persistCurrentScenarioSelection()
+        refreshScenarioPopup()
+        loadCurrentScenario()
+        undoCoordinator.resetBaseline()
     }
 
     // MARK: - Action editing (insert / delete / reorder)
@@ -1690,9 +1639,12 @@ class ViewController: NSViewController {
         // `.aiGen` can tell the server which flow not to branch back to.
         let store = ScenarioStore.shared
         if store.scenarios.indices.contains(currentScenarioIndex) {
-            runner.currentScenarioId = store.scenarios[currentScenarioIndex].id.uuidString
+            let scenario = store.scenarios[currentScenarioIndex]
+            runner.currentScenarioId = scenario.id.uuidString
+            runner.currentScenarioName = scenario.name
         } else {
             runner.currentScenarioId = nil
+            runner.currentScenarioName = nil
         }
         // Pin the active FlowMode for the duration of this run so
         // `.nextScenario` actions can pick a per-mode target.

@@ -27,14 +27,11 @@ class AppLogger {
 
     private init() {}
 
-    /// Begin capturing for the on-screen log. Clears any prior contents so
-    /// the visible log focuses on the current run.
+    /// Begin capturing for the on-screen log. Previous run contents are
+    /// preserved so the user can see history across scenarios; the run's
+    /// start/end is marked by 시작/종료 lines logged by `AutomationRunner`.
     func startSession() {
         capturingForUI = true
-        lines.removeAll()
-        DispatchQueue.main.async {
-            self.logText.onNext("")
-        }
     }
 
     /// Stop appending to the on-screen log. Leaves the existing contents

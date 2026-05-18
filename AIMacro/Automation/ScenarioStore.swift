@@ -106,6 +106,14 @@ final class ScenarioStore {
         save()
     }
 
+    func move(at sourceIndex: Int, to destIndex: Int) {
+        guard scenarios.indices.contains(sourceIndex) else { return }
+        let scenario = scenarios.remove(at: sourceIndex)
+        let safeDest = max(0, min(destIndex, scenarios.count))
+        scenarios.insert(scenario, at: safeDest)
+        save()
+    }
+
     // MARK: - Action mutations
 
     func insertAction(_ action: AutoAction,

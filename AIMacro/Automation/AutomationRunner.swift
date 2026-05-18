@@ -57,6 +57,11 @@ final class AutomationRunner {
     /// the server can keep the AI from branching to itself).
     var currentScenarioId: String?
 
+    /// Display name of the scenario currently being executed. Set by the
+    /// view controller before each `run(_:)` so the runner can emit
+    /// 시작/종료 markers in the on-screen log.
+    var currentScenarioName: String?
+
     /// UUID of the FlowMode active for this run. Used by `.nextScenario`
     /// to pick a per-mode target — unset / unknown values fall back to
     /// the default (first) FlowMode's target, then to the legacy value,
@@ -118,7 +123,14 @@ final class AutomationRunner {
         // session ends on early return / cancellation / thrown error so idle
         // logs stay console-only.
         AppLogger.shared.startSession()
-        defer { AppLogger.shared.endSession() }
+        let trimmedName = (currentScenarioName ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let scenarioLabel = trimmedName.isEmpty ? "플로우" : trimmedName
+        AppLogger.shared.log("▶️ 시작: \(scenarioLabel)")
+        defer {
+            AppLogger.shared.log("⏹ 종료: \(scenarioLabel)")
+            AppLogger.shared.endSession()
+        }
 
         // Hold a display-sleep assertion for the full run. wait(.time) can
         // sleep for hours; without this the screen idles off and the next
@@ -228,7 +240,7 @@ final class AutomationRunner {
             return
         }
         // Quartz coords (Y-down). action.point is the center; convert to
-        // the top-left origin a CGWindowListCreateImage rect expects.
+        // a top-left-origin rect for the SC screenshot.
         let captureRect = CGRect(x: center.x - size.width / 2,
                                  y: center.y - size.height / 2,
                                  width: size.width,
@@ -263,10 +275,7 @@ final class AutomationRunner {
             // Capture a fresh screenshot for each turn — the whole point
             // of the loop is that the model sees the result of the prior
             // turn's actions before deciding what to do next.
-            guard let cg = CGWindowListCreateImage(captureRect,
-                                                   .optionOnScreenOnly,
-                                                   kCGNullWindowID,
-                                                   .nominalResolution) else {
+            guard let cg = await ScreenCapturer.captureOnce(captureRect) else {
                 AppLogger.shared.log("⚠️ AI 액션 — 화면 캡처 실패")
                 return
             }
@@ -330,11 +339,9 @@ final class AutomationRunner {
         guard !rawActions.isEmpty else { return }
 
         // Coordinate translation: server returns image-local pixels with
-        // the image's pixelSize matching what we sent (the CGImage). Both
-        // axes scale identically since CGWindowListCreateImage with
-        // `.nominalResolution` gives point-equal pixels on non-Retina
-        // sources but a 2× backing on Retina. Use the actual CG pixel
-        // dimensions vs. our requested rect to derive the scale.
+        // the image's pixelSize matching what we sent (the CGImage). Use
+        // the actual CG pixel dimensions vs. our requested rect to derive
+        // the per-axis scale (handles Retina backing transparently).
         let pixelW = Double(cg.width)
         let pixelH = Double(cg.height)
         let scaleX = pixelW > 0 ? Double(captureRect.width) / pixelW : 1
