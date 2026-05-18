@@ -78,14 +78,12 @@ class ViewController: NSViewController {
     /// the main thread so the table delegate can read it synchronously.
     private var currentRunningIndex: Int?
 
-    /// Programmatic scenario picker — replaces the segmented control. The
-    /// popup is built in `setupScenarioControls()` and populated from
-    /// `ScenarioStore.shared.scenarios`. The old `groupTab` outlet is kept
+    /// Single button showing the currently-selected scenario's name. Clicking
+    /// it opens the scenario edit popover (rename / delete / pick-another).
+    /// Built in `setupScenarioControls()`. The old `groupTab` outlet is kept
     /// alive (just hidden) so the storyboard's IBAction wiring still resolves.
-    private var scenarioPopup: NSPopUpButton!
+    private var scenarioButton: NSButton!
     private var currentScenarioIndex: Int = 0
-    /// Anchor button for the scenario-edit popover (rename + delete).
-    private var scenarioEditButton: NSButton!
 
     /// Storyboard settings gear button, captured in `setupSettingsButtonIcon()`
     /// so other top-right widgets (e.g. the flow-mode picker) can anchor to it.
@@ -94,7 +92,7 @@ class ViewController: NSViewController {
     /// `FlowModeStore` and refreshed on `FlowModeStore.didChangeNotification`.
     private var flowModePopup: NSPopUpButton!
     /// Anchor button for the FlowMode rename/delete popover (mirrors
-    /// `scenarioEditButton`).
+    /// `scenarioButton`).
     private var flowModeEditButton: NSButton!
     private var currentFlowModeIndex: Int = 0
 
@@ -759,39 +757,26 @@ class ViewController: NSViewController {
         // IBAction connection and surrounding constraints still resolve.
         groupTab.isHidden = true
 
-        func smallButton(_ title: String, _ action: Selector) -> NSButton {
-            let b = NSButton(title: title, target: self, action: action)
-            b.bezelStyle = .roundRect
-            b.controlSize = .small
-            b.translatesAutoresizingMaskIntoConstraints = false
-            return b
-        }
-
-        // popup [편집] — the + button moved into the editor popup itself.
-        // The settings button on the right is the storyboard's existing 설정
-        // button, already wired to `onSettings:`.
-        scenarioPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        scenarioPopup.target = self
-        scenarioPopup.action = #selector(onChangeScenario(_:))
-        scenarioPopup.translatesAutoresizingMaskIntoConstraints = false
-
-        scenarioEditButton = smallButton("편집", #selector(showScenarioEditPopover))
-        scenarioEditButton.toolTip = L("Manage flows")
-
-        let stack = NSStackView(views: [scenarioPopup, scenarioEditButton])
-        stack.orientation = .horizontal
-        stack.spacing = 6
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(stack)
+        // Single button showing the selected scenario name; clicking it opens
+        // the same edit popover the old "편집" button used (which also lets the
+        // user switch to a different scenario from the list inside).
+        scenarioButton = NSButton(title: "",
+                                  target: self,
+                                  action: #selector(showScenarioEditPopover))
+        scenarioButton.bezelStyle = .roundRect
+        scenarioButton.controlSize = .regular
+        scenarioButton.toolTip = L("Manage flows")
+        scenarioButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(scenarioButton)
 
         NSLayoutConstraint.activate([
             // Pin to the leading edge with the same 14pt inset the redesign
             // uses for its toolbar — the storyboard's hidden segmented
             // control was positioned further right and we no longer want to
             // inherit that offset.
-            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
-            stack.topAnchor.constraint(equalTo: groupTab.topAnchor),
-            scenarioPopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
+            scenarioButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
+            scenarioButton.topAnchor.constraint(equalTo: groupTab.topAnchor),
+            scenarioButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
         ])
 
         // Cross-Runner sync: any window's add/rename/delete/duplicate calls
@@ -813,7 +798,7 @@ class ViewController: NSViewController {
     /// popup, and reload the scenario only if the one we were showing was
     /// deleted elsewhere.
     private func handleScenarioStoreChange() {
-        guard scenarioPopup != nil else { return }
+        guard scenarioButton != nil else { return }
         let store = ScenarioStore.shared
         let displayedId = currentScenarioIdString()
 
@@ -1038,29 +1023,18 @@ class ViewController: NSViewController {
         }
     }
 
+    /// Update the scenario button's title to the currently-selected scenario
+    /// name. Clamps `currentScenarioIndex` to the store's bounds and falls
+    /// back to a placeholder label when there are no scenarios.
     private func refreshScenarioPopup() {
-        scenarioPopup.removeAllItems()
         let store = ScenarioStore.shared
-        for scenario in store.scenarios {
-            scenarioPopup.addItem(withTitle: scenario.name)
-        }
         let safeIndex = min(max(0, currentScenarioIndex), store.scenarios.count - 1)
         if store.scenarios.indices.contains(safeIndex) {
-            scenarioPopup.selectItem(at: safeIndex)
             currentScenarioIndex = safeIndex
+            scenarioButton.title = store.scenarios[safeIndex].name
+        } else {
+            scenarioButton.title = L("Manage flows")
         }
-    }
-
-    @objc private func onChangeScenario(_ sender: Any?) {
-        let idx = scenarioPopup.indexOfSelectedItem
-        guard ScenarioStore.shared.scenarios.indices.contains(idx) else { return }
-        currentScenarioIndex = idx
-        persistCurrentScenarioSelection()
-        loadCurrentScenario()
-        // Scenario switching is navigation, not a mutation — re-anchor the
-        // baseline so the next edit registers its inverse against this view,
-        // not whatever scenario the user was last looking at.
-        undoCoordinator.resetBaseline()
     }
 
     /// Push the currently-selected scenario's actions into `self.actions`,
@@ -1726,7 +1700,7 @@ class ViewController: NSViewController {
         }
         currentScenarioIndex = target
         persistCurrentScenarioSelection()
-        scenarioPopup.selectItem(at: target)
+        refreshScenarioPopup()
         loadCurrentScenario()
         AppLogger.shared.log("➡️ 플로우 전환: \(store.scenarios[target].name)")
         return true
@@ -1800,7 +1774,7 @@ class ViewController: NSViewController {
         if let idx = rawIndex, scenarios.indices.contains(idx) {
             currentScenarioIndex = idx
             persistCurrentScenarioSelection()
-            scenarioPopup.selectItem(at: idx)
+            refreshScenarioPopup()
             loadCurrentScenario()
         }
 
@@ -1851,8 +1825,8 @@ class ViewController: NSViewController {
             // viewDidLoad may not have fired yet (storyboard hasn't loaded
             // the view). When it runs, refreshScenarioPopup/loadCurrentScenario
             // will pick up the new index. If it already ran, update the UI.
-            if scenarioPopup != nil {
-                scenarioPopup.selectItem(at: idx)
+            if scenarioButton != nil {
+                refreshScenarioPopup()
                 loadCurrentScenario()
             }
         }
