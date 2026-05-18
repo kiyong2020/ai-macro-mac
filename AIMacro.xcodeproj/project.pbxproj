@@ -17,9 +17,22 @@
 		A4E95C319759B78EBA28B157 /* Pods-AIMacro.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-AIMacro.debug.xcconfig"; path = "Target Support Files/Pods-AIMacro/Pods-AIMacro.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		71C217AB2FBAEBC70038F64B /* Exceptions for "AIMacro" folder in "AIMacro" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 71DDDC312E12BAD800AC2765 /* AIMacro */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		71DDDC342E12BAD800AC2765 /* AIMacro */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				71C217AB2FBAEBC70038F64B /* Exceptions for "AIMacro" folder in "AIMacro" target */,
+			);
 			path = AIMacro;
 			sourceTree = "<group>";
 		};
@@ -342,6 +355,7 @@
 				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AIMacro/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Macroony;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "스크린 내용을 캡처하려면 권한이 필요해요.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -391,6 +405,7 @@
 				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AIMacro/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Macroony;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "스크린 내용을 캡처하려면 권한이 필요해요.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
