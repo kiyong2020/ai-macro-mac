@@ -88,14 +88,17 @@ final class ScenarioListEditorWindowController: NSWindowController {
     // MARK: - Construction
 
     init() {
+        let initialWidth: CGFloat = 448
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 420),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 0, y: 0, width: initialWidth, height: 420),
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "플로우 관리"
         window.isReleasedWhenClosed = false
+        // Both dimensions are drag-adjustable; only a sensible minimum is set.
+        window.minSize = NSSize(width: 360, height: 300)
         super.init(window: window)
         buildUI()
     }
@@ -197,17 +200,9 @@ final class ScenarioListEditorWindowController: NSWindowController {
         detailContainer.addSubview(actionCountLabel)
         detailContainer.addSubview(deleteButton)
 
-        let closeBtn = NSButton(title: "완료",
-                                target: self,
-                                action: #selector(closeEditor(_:)))
-        closeBtn.bezelStyle = .rounded
-        closeBtn.keyEquivalent = "\r"
-        closeBtn.translatesAutoresizingMaskIntoConstraints = false
-
         content.addSubview(addButton)
         content.addSubview(scroll)
         content.addSubview(detailContainer)
-        content.addSubview(closeBtn)
 
         NSLayoutConstraint.activate([
             addButton.topAnchor.constraint(equalTo: content.topAnchor, constant: 12),
@@ -216,13 +211,15 @@ final class ScenarioListEditorWindowController: NSWindowController {
 
             scroll.topAnchor.constraint(equalTo: addButton.bottomAnchor, constant: 8),
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
-            scroll.widthAnchor.constraint(equalToConstant: 260),
-            scroll.bottomAnchor.constraint(equalTo: closeBtn.topAnchor, constant: -12),
+            scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14),
 
             detailContainer.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
             detailContainer.leadingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: 18),
             detailContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
-            detailContainer.bottomAnchor.constraint(equalTo: closeBtn.topAnchor, constant: -12),
+            detailContainer.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14),
+            // 5:5 split between the scenario list and the detail pane — both
+            // grow/shrink together as the window is resized horizontally.
+            scroll.widthAnchor.constraint(equalTo: detailContainer.widthAnchor),
 
             nameLabel.topAnchor.constraint(equalTo: detailContainer.topAnchor),
             nameLabel.leadingAnchor.constraint(equalTo: detailContainer.leadingAnchor),
@@ -236,10 +233,6 @@ final class ScenarioListEditorWindowController: NSWindowController {
 
             deleteButton.leadingAnchor.constraint(equalTo: detailContainer.leadingAnchor),
             deleteButton.bottomAnchor.constraint(equalTo: detailContainer.bottomAnchor),
-
-            closeBtn.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
-            closeBtn.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14),
-            closeBtn.widthAnchor.constraint(greaterThanOrEqualToConstant: 80),
         ])
 
         // React to cross-window mutations (e.g. another runner edits the
@@ -659,11 +652,6 @@ final class ScenarioListEditorWindowController: NSWindowController {
         } ?? [])
         notifySelectionChanged()
         onMutated?()
-    }
-
-    @objc private func closeEditor(_ sender: Any?) {
-        window?.makeFirstResponder(nil)
-        close()
     }
 
     private func notifySelectionChanged() {
