@@ -1877,7 +1877,9 @@ class ViewController: NSViewController {
 
 extension ViewController: UndoSnapshotTarget {
     func makeUndoSnapshot() -> UndoSnapshot {
-        let payload = ScenarioStore.shared.scenarios.map { $0.toJSON() }
+        // Capture the full tree (groups + ordering) so undo doesn't
+        // collapse the user's group structure into a flat list.
+        let payload = ScenarioStore.shared.tree.map { $0.toJSON() }
         let data = (try? JSONSerialization.data(withJSONObject: payload,
                                                 options: [.sortedKeys])) ?? Data()
         return UndoSnapshot(scenariosData: data,
@@ -1886,11 +1888,16 @@ extension ViewController: UndoSnapshotTarget {
     }
 
     func applyUndoSnapshot(_ snapshot: UndoSnapshot) {
-        // Rebuild scenarios from the snapshot payload.
         let store = ScenarioStore.shared
         guard let raw = try? JSONSerialization.jsonObject(with: snapshot.scenariosData),
               let arr = raw as? [[String: Any]] else { return }
-        let restored = arr.compactMap { Scenario.fromJSON($0) }
+        let restoredTree = arr.compactMap { ScenarioNode.fromJSON($0) }
+        let restored: [Scenario] = restoredTree.flatMap { node -> [Scenario] in
+            switch node {
+            case .group(let g):    return g.scenarios
+            case .scenario(let s): return [s]
+            }
+        }
 
         // Identify actions that vanished so their per-action SQLite + OCR
         // snapshot rows can be reclaimed. Anything still present has its
@@ -1909,7 +1916,7 @@ extension ViewController: UndoSnapshotTarget {
             }
         }
 
-        store.replaceAll(with: restored)
+        store.replaceAll(tree: restoredTree)
 
         let safeIndex = max(0, min(snapshot.currentScenarioIndex, restored.count - 1))
         currentScenarioIndex = safeIndex
