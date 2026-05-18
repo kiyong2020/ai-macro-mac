@@ -61,9 +61,16 @@ final class ActionListCellView: NSTableCellView {
         super.init(coder: coder)
     }
 
-    func configure(index: Int, image: NSImage?, name: String) {
+    func configure(index: Int, image: NSImage?, name: String, disabled: Bool = false) {
         numberLabel.stringValue = "\(index + 1)"
         iconView.image = image
         nameLabel.stringValue = name
+
+        let alpha: CGFloat = disabled ? 0.35 : 1.0
+        nameLabel.textColor = (disabled ? NSColor.tertiaryLabelColor : NSColor.labelColor)
+        iconView.contentTintColor = (disabled ? .tertiaryLabelColor : .secondaryLabelColor)
+        numberLabel.textColor = (disabled ? NSColor.quaternaryLabelColor : NSColor.tertiaryLabelColor)
+        nameLabel.alphaValue = alpha
+        iconView.alphaValue = alpha
     }
 }

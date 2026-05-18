@@ -297,6 +297,13 @@ class ViewController: NSViewController {
             self?.tableView.reloadData()
             self?.undoCoordinator.captureIfChanged()
         }
+
+        // Disable checkbox in the detail pane: repaint the list so the row
+        // greys out (or comes back) immediately.
+        detailBuilder.onActionDisabledToggled = { [weak self] in
+            self?.tableView.reloadData()
+            self?.undoCoordinator.captureIfChanged()
+        }
     }
 
     /// Mount the form for the currently-selected action (or the empty state).

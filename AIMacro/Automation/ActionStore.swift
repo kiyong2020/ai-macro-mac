@@ -22,6 +22,7 @@ final class ActionStore {
     private let textCol = SQLite.Expression<String>("text")
     private let nameCol = SQLite.Expression<String>("name")
     private let clicksCol = SQLite.Expression<Int>("clicks")
+    private let disabledCol = SQLite.Expression<Bool>("disabled")
 
     private init() {
         let fm = FileManager.default
@@ -48,11 +49,13 @@ final class ActionStore {
             t.column(textCol, defaultValue: "")
             t.column(nameCol, defaultValue: "")
             t.column(clicksCol, defaultValue: 1)
+            t.column(disabledCol, defaultValue: false)
         })
         // Migration: add the `clicks` column to pre-existing databases.
         // SQLite ignores the duplicate-column error so this is safe to
         // call every launch.
         try? db.run(actions.addColumn(clicksCol, defaultValue: 1))
+        try? db.run(actions.addColumn(disabledCol, defaultValue: false))
     }
 
     // MARK: - Per-action read/write
@@ -69,6 +72,7 @@ final class ActionStore {
         let countVal = (try? action.count.value()) ?? 1
         let textVal = (try? action.text.value()) ?? ""
         let clicksVal = (try? action.clicks.value()) ?? 1
+        let disabledVal = (try? action.disabled.value()) ?? false
 
         let setters: [Setter] = [
             idCol <- action.id,
@@ -78,6 +82,7 @@ final class ActionStore {
             textCol <- textVal,
             nameCol <- action.name,
             clicksCol <- clicksVal,
+            disabledCol <- disabledVal,
         ]
         // INSERT OR REPLACE on id.
         do {
@@ -113,6 +118,9 @@ final class ActionStore {
             // result set; default to 1 in that case.
             if let v = try? row.get(clicksCol) {
                 action.clicks.onNext(v)
+            }
+            if let v = try? row.get(disabledCol) {
+                action.disabled.onNext(v)
             }
             let storedName = row[nameCol]
             if !storedName.isEmpty { action.name = storedName }

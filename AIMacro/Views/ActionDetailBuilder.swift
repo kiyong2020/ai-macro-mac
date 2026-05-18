@@ -16,6 +16,9 @@ final class ActionDetailBuilder {
     /// underlying action's `name`. ViewController uses this to reload the
     /// list cell on the left so the rename is reflected immediately.
     var onActionRenamed: (() -> Void)?
+    /// Called when the disable checkbox is toggled on the detail pane so
+    /// the list cell can repaint its greyed-out state immediately.
+    var onActionDisabledToggled: (() -> Void)?
 
     init(mouseListener: MouseListener) {
         self.mouseListener = mouseListener
@@ -161,6 +164,9 @@ final class ActionDetailBuilder {
                          control: makeDelayField(action, disposeBag: disposeBag),
                          hint: "액션 실행 후 다음 단계까지 대기 (초)")
         }
+        basic.addRow(label: L("Disabled"),
+                     control: makeDisabledCheckbox(action, disposeBag: disposeBag),
+                     hint: "체크 시 목록에서 회색으로 표시되고, 실행 시 건너뜁니다")
         cards.append(basic)
 
         // Type-specific card.
@@ -357,6 +363,24 @@ final class ActionDetailBuilder {
         field.translatesAutoresizingMaskIntoConstraints = false
         return field
     }
+
+    private func makeDisabledCheckbox(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
+        let checkbox = NSButton(checkboxWithTitle: L("Skip this action"),
+                                target: nil, action: nil)
+        checkbox.state = ((try? action.disabled.value()) ?? false) ? .on : .off
+        checkbox.translatesAutoresizingMaskIntoConstraints = false
+
+        let bridge = DisabledToggleBridge(action: action, checkbox: checkbox) { [weak self] in
+            self?.onActionDisabledToggled?()
+        }
+        checkbox.target = bridge
+        checkbox.action = #selector(DisabledToggleBridge.toggled)
+        objc_setAssociatedObject(checkbox, &Self.disabledBridgeAssocKey,
+                                 bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        return checkbox
+    }
+
+    private static var disabledBridgeAssocKey: UInt8 = 0
 
     private func makeDelayField(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
         let field = NSTextField(string: String(format: "%g", (try? action.delay.value()) ?? 0))
@@ -2924,6 +2948,30 @@ private final class ScrollDirectionBridge: NSObject {
     @objc func changed(_ sender: NSSegmentedControl) {
         guard directions.indices.contains(sender.selectedSegment) else { return }
         action?.setScrollDirection(directions[sender.selectedSegment])
+    }
+}
+
+/// Checkbox shim for the per-action "disable" option. Pushes the new
+/// state onto `action.disabled` and notifies the detail builder so the
+/// sidebar cell can repaint immediately.
+private final class DisabledToggleBridge: NSObject {
+    private weak var action: AutoAction?
+    let checkbox: NSButton
+    private let onToggled: () -> Void
+
+    init(action: AutoAction, checkbox: NSButton, onToggled: @escaping () -> Void) {
+        self.action = action
+        self.checkbox = checkbox
+        self.onToggled = onToggled
+    }
+
+    @objc func toggled() {
+        action?.disabled.onNext(checkbox.state == .on)
+        // Throttled save in `loadCurrentScenario` only watches
+        // point/delay/count/text — persist explicitly so a toggle isn't
+        // lost on relaunch.
+        action?.save()
+        onToggled()
     }
 }
 

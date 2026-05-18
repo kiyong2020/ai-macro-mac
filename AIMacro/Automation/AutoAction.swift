@@ -66,10 +66,15 @@ class AutoAction {
     /// recognised target. Unused by other action types (their repeat count
     /// lives in `count`; OCR's `count` is repurposed for scan-area size).
     let clicks = BehaviorSubject<Int>(value: 1)
+    /// When true, the action is shown greyed-out in the list and the
+    /// runner skips it during playback. Persisted alongside the other
+    /// user-editable fields.
+    let disabled = BehaviorSubject<Bool>(value: false)
 
     init(type:ActionType, group: String = "", name:String = "", point: CGPoint = .zero, delay: Double = 0, count: Int = 1,
          text:String = "",
          clicks: Int = 1,
+         disabled: Bool = false,
          runsDisablePopup: Bool = false,
          id: String = UUID().uuidString) {
         self.id = id
@@ -81,6 +86,7 @@ class AutoAction {
         self.count.onNext(count)
         self.text.onNext(text)
         self.clicks.onNext(clicks)
+        self.disabled.onNext(disabled)
     }
     
     func set(json: [String: Any]) throws {
@@ -104,6 +110,9 @@ class AutoAction {
         if let clicks = json["clicks"] as? Int {
             self.clicks.onNext(clicks)
         }
+        if let disabled = json["disabled"] as? Bool {
+            self.disabled.onNext(disabled)
+        }
     }
 
     func toJSON() -> [String: Any] {
@@ -115,6 +124,7 @@ class AutoAction {
             "count": try! count.value(),
             "text": try! text.value(),
             "clicks": try! clicks.value(),
+            "disabled": try! disabled.value(),
             ]
     }
     
@@ -212,6 +222,7 @@ extension AutoAction {
             count: (try? count.value()) ?? 1,
             text: (try? text.value()) ?? "",
             clicks: (try? clicks.value()) ?? 1,
+            disabled: (try? disabled.value()) ?? false,
             runsDisablePopup: runsDisablePopup
         )
         return copy

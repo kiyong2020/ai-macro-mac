@@ -151,6 +151,10 @@ final class AutomationRunner {
         for (i, action) in actions.enumerated() {
             currentIndex.onNext(i)
             currentName.onNext(action.name)
+            if (try? action.disabled.value()) == true {
+                AppLogger.shared.log("⏭ 건너뜀(비활성): \(action.name)")
+                continue
+            }
             do {
                 try await run(action)
             } catch {

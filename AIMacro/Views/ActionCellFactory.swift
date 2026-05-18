@@ -21,7 +21,8 @@ final class ActionCellFactory {
         let cell = ActionListCellView()
         cell.configure(index: row,
                        image: ActionIcons.image(for: action.type),
-                       name: action.name)
+                       name: action.name,
+                       disabled: (try? action.disabled.value()) ?? false)
         return cell
     }
 }
