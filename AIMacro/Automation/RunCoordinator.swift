@@ -18,9 +18,7 @@ final class RunCoordinator {
     /// its `AutomationRunner.run(_:)` and calls `finish(token:)` afterwards.
     final class Token {
         let id = UUID()
-        /// Mutable so `.nextScenario` chaining can re-target the lock without
-        /// releasing the slot — preserves FIFO ordering for other windows.
-        fileprivate(set) var scenarioId: String
+        let scenarioId: String
         weak var owner: AnyObject?
         let proceed: () -> Void
         init(scenarioId: String, owner: AnyObject?, proceed: @escaping () -> Void) {
@@ -94,17 +92,6 @@ final class RunCoordinator {
             activeScenarioId.onNext(nil)
             queueDidChange.onNext(())
         }
-    }
-
-    /// Re-target the active token to a different scenario (used when an
-    /// in-flight run chains to a different scenario via `.nextScenario`).
-    /// No-op if `token` is not currently active.
-    func updateActiveScenario(token: Token, to scenarioId: String) {
-        lock.lock()
-        guard active?.id == token.id else { lock.unlock(); return }
-        active?.scenarioId = scenarioId
-        lock.unlock()
-        activeScenarioId.onNext(scenarioId)
     }
 
     /// Cancel a token. If it's active, behaves like `finish` (pops the next).

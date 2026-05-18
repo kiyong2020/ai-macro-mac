@@ -1714,13 +1714,15 @@ class ViewController: NSViewController {
             if let request = self.runner.nextScenarioRequest,
                try! self.isRunning.value(),
                self.advanceScenario(for: request) {
-                // Same slot, different scenario — update the lock target
-                // so windows showing the new scenario know to disable edits.
-                if let token = self.coordinatorToken,
-                   let newId = self.currentScenarioIdString() {
-                    RunCoordinator.shared.updateActiveScenario(token: token, to: newId)
+                // `.nextScenario` emits no input events, so it's a safe
+                // yield point: release the slot, then re-request one for
+                // the chained scenario. This lets any waiting window run
+                // first; the chained run rejoins the back of the queue.
+                if let oldToken = self.coordinatorToken {
+                    RunCoordinator.shared.finish(token: oldToken)
+                    self.coordinatorToken = nil
                 }
-                self.beginRun()
+                self.requestRunSlot()
                 return
             }
 
