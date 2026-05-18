@@ -657,6 +657,12 @@ class ViewController: NSViewController {
             if try! self.isRunning.value() {
                 if code == 36 || code == 76 {
                     self.runner.signalWaitDone()
+                } else if code == 53 {
+                    // ESC aborts the in-progress flow — same teardown path as
+                    // the Stop button (cancels the Task, releases the queue
+                    // slot, stops the runner).
+                    AppLogger.shared.log("⏹ ESC 키로 중단")
+                    self.isRunning.onNext(false)
                 }
             } else {
                 if let numStr = keyCodeToNumber(code) {

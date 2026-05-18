@@ -59,6 +59,14 @@ class GlobalKeyListener {
         guard let userInfo = userInfo else { return Unmanaged.passUnretained(event) }
         let mySelf = Unmanaged<GlobalKeyListener>.fromOpaque(userInfo).takeUnretainedValue()
 
+        // Drop events synthesised by this app itself (e.g. `.key` action that
+        // sends ESC) — otherwise the listener would treat them as real user
+        // input and abort the flow it just emitted.
+        let sourcePID = event.getIntegerValueField(.eventSourceUnixProcessID)
+        if sourcePID == Int64(getpid()) {
+            return Unmanaged.passUnretained(event)
+        }
+
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
         let shiftPressed = flags.contains(.maskShift)

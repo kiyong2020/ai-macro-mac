@@ -142,7 +142,12 @@ final class AutomationRunner {
         // per-run state before the first action fires.
         NotificationCenter.default.post(name: .actionSequenceWillStart, object: self)
 
+        // Keep the global key tap active for the entire run so the user can
+        // press ESC to abort at any time (handled in ViewController). The
+        // initial stop() clears any stale tap before we re-arm.
         keyboardListener.stop()
+        keyboardListener.start()
+        defer { keyboardListener.stop() }
         totalCount.onNext(actions.count)
         lastError.onNext(nil)
         nextScenarioRequest = nil
@@ -501,8 +506,8 @@ final class AutomationRunner {
     }
 
     private func waitForEnterKey() async throws {
-        keyboardListener.start()
-        defer { keyboardListener.stop() }
+        // The keyboard listener is already running for the duration of the
+        // run (started in `run(_:)`), so we just wait for the Enter signal.
         waitDone = false
         while !waitDone {
             try await Task.sleep(for: .milliseconds(10))
