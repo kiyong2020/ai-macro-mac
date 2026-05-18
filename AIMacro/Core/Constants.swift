@@ -18,6 +18,11 @@ class Constants {
     /// would just be visual noise.
     static let showOCRDebugWindow: Bool = false
 
+    /// Shape-weighted similarity threshold required for an OCR match to be
+    /// clicked. 1.0 is a perfect match; ~0.75 covers single-jamo OCR misreads
+    /// while keeping unrelated text below the bar.
+    static let ocrMatchThreshold: Double = 0.75
+
     /// Base URL of the ai-macro-api server. The `.aiGen` action POSTs to
     /// `<baseServerURL>/generate-actions` to translate a captured screen
     /// region + instruction into a list of `AutoAction`s.

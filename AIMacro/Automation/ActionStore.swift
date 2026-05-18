@@ -21,6 +21,7 @@ final class ActionStore {
     private let countCol = SQLite.Expression<Int>("count")
     private let textCol = SQLite.Expression<String>("text")
     private let nameCol = SQLite.Expression<String>("name")
+    private let clicksCol = SQLite.Expression<Int>("clicks")
 
     private init() {
         let fm = FileManager.default
@@ -46,7 +47,12 @@ final class ActionStore {
             t.column(countCol, defaultValue: 1)
             t.column(textCol, defaultValue: "")
             t.column(nameCol, defaultValue: "")
+            t.column(clicksCol, defaultValue: 1)
         })
+        // Migration: add the `clicks` column to pre-existing databases.
+        // SQLite ignores the duplicate-column error so this is safe to
+        // call every launch.
+        try? db.run(actions.addColumn(clicksCol, defaultValue: 1))
     }
 
     // MARK: - Per-action read/write
@@ -62,6 +68,7 @@ final class ActionStore {
         let delayVal = (try? action.delay.value()) ?? 0
         let countVal = (try? action.count.value()) ?? 1
         let textVal = (try? action.text.value()) ?? ""
+        let clicksVal = (try? action.clicks.value()) ?? 1
 
         let setters: [Setter] = [
             idCol <- action.id,
@@ -70,6 +77,7 @@ final class ActionStore {
             countCol <- countVal,
             textCol <- textVal,
             nameCol <- action.name,
+            clicksCol <- clicksVal,
         ]
         // INSERT OR REPLACE on id.
         do {
@@ -100,6 +108,12 @@ final class ActionStore {
             action.delay.onNext(row[delayCol])
             action.count.onNext(row[countCol])
             action.text.onNext(row[textCol])
+            // `clicks` column was added later — old rows may not have it.
+            // `row[clicksCol]` throws if the column is missing on this row's
+            // result set; default to 1 in that case.
+            if let v = try? row.get(clicksCol) {
+                action.clicks.onNext(v)
+            }
             let storedName = row[nameCol]
             if !storedName.isEmpty { action.name = storedName }
             return true

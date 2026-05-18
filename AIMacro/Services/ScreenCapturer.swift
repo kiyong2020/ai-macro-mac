@@ -256,3 +256,61 @@ func clampedRect(for rect: CGRect, in screen: NSScreen) -> CGRect {
 
     return CGRect(x: x, y: y, width: width, height: height)
 }
+
+struct ScreenshotResult {
+    /// Captured pixels — already cropped to the requested region.
+    let image: CGImage
+    /// Logical-points → pixels scale used for the capture.
+    let bufferScale: CGFloat
+    /// Rect that was actually captured (clamped to the host screen), in NSScreen
+    /// Y-up coordinates. Callers use this to translate match rects back to
+    /// global Quartz click coordinates.
+    let effectiveRect: CGRect
+}
+
+extension ScreenCapturer {
+    /// One-shot screenshot of a screen-coordinate rect (NSScreen Y-up).
+    /// Uses `SCScreenshotManager` so each capture is a fresh, direct request —
+    /// avoids `SCStream` lifecycle and frame-throttling pitfalls when the only
+    /// goal is to feed OCR on a polling schedule.
+    static func captureOnce(rect: CGRect, outputScale: CGFloat = 1.0) async -> ScreenshotResult? {
+        guard CGPreflightScreenCaptureAccess() else {
+            AppLogger.shared.log("⚠️ 화면 기록 권한이 없습니다. 시스템 설정에서 허용 후 앱을 재시작해주세요.")
+            return nil
+        }
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            guard let nsScreen = NSScreen.screens.first(where: { $0.frame.intersects(rect) }),
+                  let screenNumber = nsScreen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+                  let scDisplay = content.displays.first(where: { $0.displayID == screenNumber }) else {
+                let screensDesc = NSScreen.screens.map { "\(Int($0.frame.minX)),\(Int($0.frame.minY)) \(Int($0.frame.width))×\(Int($0.frame.height))" }.joined(separator: " | ")
+                AppLogger.shared.log("❌ 캡처 영역 (\(Int(rect.minX)),\(Int(rect.minY)) \(Int(rect.width))×\(Int(rect.height))) 에 해당하는 화면이 없습니다. 모니터 구성: [\(screensDesc)]")
+                return nil
+            }
+            let safeRect = clampedRect(for: rect, in: nsScreen)
+            if safeRect.width <= 0 || safeRect.height <= 0 { return nil }
+
+            // NSScreen Y-up (origin at bottom-left of primary display) →
+            // display-local Y-down (origin at top-left of the captured display)
+            // for SCStreamConfiguration.sourceRect.
+            let localX = safeRect.origin.x - nsScreen.frame.origin.x
+            let localY = nsScreen.frame.maxY - safeRect.maxY
+            let sourceRect = CGRect(x: localX, y: localY, width: safeRect.width, height: safeRect.height)
+
+            let config = SCStreamConfiguration()
+            config.sourceRect = sourceRect
+            config.width = max(1, Int(safeRect.width * outputScale))
+            config.height = max(1, Int(safeRect.height * outputScale))
+            config.pixelFormat = kCVPixelFormatType_32BGRA
+            config.showsCursor = false
+            config.capturesAudio = false
+
+            let filter = SCContentFilter(display: scDisplay, excludingWindows: [])
+            let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            return ScreenshotResult(image: cgImage, bufferScale: outputScale, effectiveRect: safeRect)
+        } catch {
+            AppLogger.shared.log("⚠️ 스크린샷 실패: \(error)")
+            return nil
+        }
+    }
+}

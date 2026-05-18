@@ -113,6 +113,32 @@ final class OCRDebugWindow {
         }
     }
 
+    /// Scored variant used by the OCR matcher: each entry already carries its
+    /// similarity score against the target, plus a flag indicating whether
+    /// it's the chosen one. Sorted by score descending in the display.
+    struct ScoredResult {
+        let text: String
+        let box: CGRect
+        let score: Double
+        let isMatch: Bool
+        let merged: Bool
+    }
+
+    func updateScored(image: NSImage, results: [ScoredResult], target: String) {
+        guard Constants.showOCRDebugWindow else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.imageView.image = image
+            let sorted = results.sorted { $0.score > $1.score }
+            let lines = sorted.map { r -> String in
+                let marker = r.isMatch ? "✓" : (r.merged ? "+" : " ")
+                let pct = String(format: "%.2f", r.score)
+                return "\(marker) [\(pct)] \(r.text)  [\(Int(r.box.minX)),\(Int(r.box.minY)) \(Int(r.box.width))×\(Int(r.box.height))]"
+            }
+            self.resultsView.string = lines.isEmpty ? "(인식된 글자 없음)" : lines.joined(separator: "\n")
+        }
+    }
+
     /// Show an error message in place of the recognised-text list. Used when
     /// the screen capture fails (e.g. point recorded on a screen no longer
     /// connected, or permission missing).

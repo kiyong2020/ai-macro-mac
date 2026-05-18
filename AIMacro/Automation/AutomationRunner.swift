@@ -553,109 +553,149 @@ final class AutomationRunner {
         )
 
         var done = false
-        // recognizeText completes on a global queue and several frames may
-        // be in flight at once. Without a lock all completions can pass
-        // `!done` simultaneously and each fire a click. The lock serializes
-        // the check+set so exactly one match wins, and lets us suppress the
-        // "OCR 스캔" log and debug-window update the moment that winner has
-        // committed — scanning stops the instant we've clicked once.
-        let doneLock = NSLock()
         mouseListener.onMouseDown = { [weak self] _, _ in
             self?.mouseListener.stop()
-            doneLock.lock(); done = true; doneLock.unlock()
+            done = true
         }
         mouseListener.start()
 
-        // Debug window: shows the live capture frame + every recognised string,
-        // marking the matching one with ✓.
+        // Debug window: shows each scanned frame + every recognised string,
+        // scored against the target with the winning entry marked.
         OCRDebugWindow.shared.show(target: text)
 
-        // Use a FRESH ScreenCapturer per OCR action instead of the shared
-        // `runner.screenCapturer`. After long waits (wait(.time)) plus prior
-        // OCR start/stop cycles the shared instance can hit a state where
-        // SCStream creates successfully but never delivers frames. A fresh
-        // instance avoids that entirely.
-        //
-        // showsCursor = true is required: with a hidden cursor and a static
-        // capture area, SCStream throttles frame delivery to ~zero, so the
-        // OCR handler never fires. Including the cursor keeps the frames
-        // flowing even when no other on-screen content changes.
-        let capturer = ScreenCapturer()
-        capturer.showsCursor = true
-
-        // Tear everything down on any exit — including Task cancellation,
-        // where the cleanup below the loop is skipped because Task.sleep
-        // throws.
         defer {
-            capturer.stop()
             mouseListener.stop()
             OCRDebugWindow.shared.hide()
         }
 
-        capturer.handler = { [weak capturer] img in
-            guard !done, let capturer = capturer else { return }
-            guard let img = img, let cgImg = img.toCGImage() else {
-                // Capture failed (no display, permission denied, etc.). Bail out
-                // so the rest of the macro can continue and the user can see why.
-                OCRDebugWindow.shared.showError("화면 캡처 실패. 좌표가 현재 모니터 범위를 벗어났을 수 있습니다 — 위치를 다시 지정해보세요.")
-                AppLogger.shared.log("⚠️ OCR 캡처 실패 — 액션 건너뜀")
-                done = true
-                return
-            }
-            let bufScale = capturer.bufferScale
-            let nsRect = capturer.effectiveCaptureRect
-            let quartzOriginX = nsRect.origin.x
-            let quartzOriginY = primaryH - nsRect.maxY
-            // Register the target as a custom word so Vision prefers it over
-            // visually similar Hangul (e.g. 약 vs 악, 예 vs 얘).
-            recognizeText(from: cgImg, customWords: [text]) { results in
-                // Bail before logging/updating if the winner already committed,
-                // so no further "OCR 스캔" output leaks past the click.
-                doneLock.lock()
-                let alreadyDone = done
-                doneLock.unlock()
-                if alreadyDone { return }
-                let scanned = results.compactMap { $0.0 }.joined(separator: " | ")
-                AppLogger.shared.log("OCR 스캔: [\(scanned)]")
-                OCRDebugWindow.shared.update(image: img, results: results, target: text)
-                // Hangul-aware fuzzy contains: tolerates one syllable that
-                // differs by a single 초/중/종성 — covers OCR misreads like
-                // "예약하기" vs "예악하기" without matching unrelated text.
-                guard let result = results.first(where: {
-                    let scanned = ($0.0 ?? "").replacingOccurrences(of: " ", with: "")
-                    return fuzzyHangulContains(scanned, target: text)
-                }) else { return }
-                // Atomically claim the win — only the first matcher proceeds.
-                doneLock.lock()
-                let claimed = !done
-                if claimed { done = true }
-                doneLock.unlock()
-                guard claimed else { return }
-                capturer.stop()
-                let clickPoint = CGPoint(
-                    x: quartzOriginX + result.1.midX / bufScale,
-                    y: quartzOriginY + result.1.midY / bufScale
-                )
-                Task {
-                    AppLogger.shared.log("OCR '\(text)' 찾음 → 클릭: \(clickPoint)")
-                    await click(at: clickPoint)
-                }
-            }
-        }
-        capturer.start(rect: captureRectNS)
-
         // 15-second timeout — give up if the target text never appears.
         // Otherwise the macro stalls forever on a single missing OCR target.
         let timeoutMs = 15_000
+        let pollIntervalMs = 200
         var elapsedMs = 0
+
         while !done && elapsedMs < timeoutMs {
-            try await Task.sleep(for: .milliseconds(50))
-            elapsedMs += 50
+            guard let shot = await ScreenCapturer.captureOnce(rect: captureRectNS) else {
+                OCRDebugWindow.shared.showError("화면 캡처 실패. 좌표가 현재 모니터 범위를 벗어났을 수 있습니다 — 위치를 다시 지정해보세요.")
+                AppLogger.shared.log("⚠️ OCR 캡처 실패 — 액션 건너뜀")
+                return
+            }
+            if done { break }
+
+            let cgImg = shot.image
+            let bufScale = shot.bufferScale
+            let nsRect = shot.effectiveRect
+            let img = NSImage(cgImage: cgImg, size: NSSize(width: cgImg.width, height: cgImg.height))
+            let quartzOriginX = nsRect.origin.x
+            let quartzOriginY = primaryH - nsRect.maxY
+
+            // Register the target as a custom word so Vision prefers it over
+            // visually similar Hangul (e.g. 약 vs 악, 예 vs 얘).
+            let observations: [OCRObservation] = await withCheckedContinuation { cont in
+                recognizeTextDetailed(from: cgImg, customWords: [text], topN: 3) { cont.resume(returning: $0) }
+            }
+            if done { break }
+
+            let scanned = observations.compactMap { $0.candidates.first }.joined(separator: " | ")
+            AppLogger.shared.log("OCR 스캔: [\(scanned)]")
+
+            // Build the candidate pool: every top-N reading of every
+            // observation, plus same-row neighbour pairs/triples concatenated
+            // (covers targets that Vision split across boxes).
+            let scoredAll = scoreObservations(observations, target: text)
+            let chosen = scoredAll.max(by: { $0.score < $1.score })
+            let debugResults = scoredAll.map { s in
+                OCRDebugWindow.ScoredResult(
+                    text: s.text, box: s.box, score: s.score,
+                    isMatch: chosen.map { $0.score >= Constants.ocrMatchThreshold && $0.text == s.text && $0.box == s.box } ?? false,
+                    merged: s.merged
+                )
+            }
+            OCRDebugWindow.shared.updateScored(image: img, results: debugResults, target: text)
+
+            if let best = chosen, best.score >= Constants.ocrMatchThreshold {
+                done = true
+                let clickPoint = CGPoint(
+                    x: quartzOriginX + best.box.midX / bufScale,
+                    y: quartzOriginY + best.box.midY / bufScale
+                )
+                let clickCount = max(1, (try? action.clicks.value()) ?? 1)
+                let scorePct = String(format: "%.2f", best.score)
+                AppLogger.shared.log("OCR '\(text)' 찾음 (유사도 \(scorePct), '\(best.text)') → 클릭: \(clickPoint) × \(clickCount)")
+                for i in 0 ..< clickCount {
+                    await click(at: clickPoint)
+                    if i < clickCount - 1 {
+                        try? await Task.sleep(for: .milliseconds(100))
+                    }
+                }
+                break
+            }
+
+            try await Task.sleep(for: .milliseconds(pollIntervalMs))
+            elapsedMs += pollIntervalMs
         }
+
         if !done {
             AppLogger.shared.log("⏱ OCR '\(text)' \(timeoutMs/1000)초 내 미발견 — 액션 건너뜀")
         }
-        // Cleanup runs via defer above.
+    }
+
+    /// One scored candidate fed to the OCR matcher.
+    private struct ScoredOCRCandidate {
+        let text: String
+        let box: CGRect
+        let score: Double
+        let merged: Bool
+    }
+
+    /// Score every observation (and short same-row runs of adjacent
+    /// observations) against `target`. Returns one entry per candidate
+    /// reading — caller picks the max.
+    private func scoreObservations(_ observations: [OCRObservation],
+                                   target: String) -> [ScoredOCRCandidate] {
+        var out: [ScoredOCRCandidate] = []
+
+        // Single observations, all top-N candidates.
+        for obs in observations {
+            for cand in obs.candidates {
+                let score = scoreCandidate(cand, target: target)
+                out.append(.init(text: cand, box: obs.box, score: score, merged: false))
+            }
+        }
+
+        // Same-row runs of 2..3 boxes (top candidate only). Sort by row
+        // (using mid-Y bucketed by box height) then by X.
+        let sorted = observations.sorted { lhs, rhs in
+            let rowDiff = lhs.box.midY - rhs.box.midY
+            let rowTol = min(lhs.box.height, rhs.box.height) * 0.5
+            if abs(rowDiff) > rowTol { return rowDiff < 0 }
+            return lhs.box.minX < rhs.box.minX
+        }
+        for i in 0..<sorted.count {
+            guard let first = sorted[i].candidates.first else { continue }
+            var text = first
+            var box = sorted[i].box
+            let endJ = min(i + 3, sorted.count)
+            if i + 1 >= endJ { continue }
+            for j in (i + 1)..<endJ {
+                let next = sorted[j]
+                let sameRow = abs(next.box.midY - box.midY) < min(box.height, next.box.height) * 0.7
+                let gap = next.box.minX - box.maxX
+                if !sameRow || gap > box.height * 2 || gap < -box.width { break }
+                text += (next.candidates.first ?? "")
+                box = box.union(next.box)
+                let score = scoreCandidate(text, target: target)
+                out.append(.init(text: text, box: box, score: score, merged: true))
+            }
+        }
+        return out
+    }
+
+    private func scoreCandidate(_ candidate: String, target: String) -> Double {
+        let stripped = candidate.replacingOccurrences(of: " ", with: "")
+        // Fast path: existing strict matcher → treat as perfect.
+        if fuzzyHangulContains(stripped, target: target) { return 1.0 }
+        return bestSubstringSimilarity(stripped, target: target)
     }
 
     /// Prefer the user-edited URL in `action.text`; fall back to the enum

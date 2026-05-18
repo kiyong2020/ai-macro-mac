@@ -231,19 +231,40 @@ func convertToScreenLocalCoords(_ point: CGPoint) -> (screen: NSScreen, localPoi
 func recognizeText(from cgImage: CGImage,
                    customWords: [String] = [],
                    completion: @escaping ([(String?, CGRect)]) -> Void) {
+    recognizeTextDetailed(from: cgImage, customWords: customWords, topN: 1) { observations in
+        completion(observations.map { ($0.candidates.first, $0.box) })
+    }
+}
+
+/// Single OCR observation with multiple candidate readings (in confidence
+/// order). Use the richer form when you need fallbacks for fuzzy matching —
+/// Vision's second/third guess often hits where the first one misreads a
+/// single jamo.
+struct OCRObservation {
+    let candidates: [String]
+    let box: CGRect
+}
+
+func recognizeTextDetailed(from cgImage: CGImage,
+                           customWords: [String] = [],
+                           topN: Int = 3,
+                           completion: @escaping ([OCRObservation]) -> Void) {
     let request = VNRecognizeTextRequest { request, error in
         guard let results = request.results as? [VNRecognizedTextObservation], error == nil else {
-            completion([])  // 실패 시 빈 배열 반환
+            completion([])
             return
         }
-
-        let texts: [(String?, CGRect)] = results.compactMap { observation in
-            (observation.topCandidates(1).first?.string, convertBoundingBox(observation.boundingBox, imageSize: .init(width: cgImage.width, height: cgImage.height)))
+        let imageSize = CGSize(width: cgImage.width, height: cgImage.height)
+        let observations: [OCRObservation] = results.map { obs in
+            let strings = obs.topCandidates(topN).map { $0.string }
+            return OCRObservation(
+                candidates: strings,
+                box: convertBoundingBox(obs.boundingBox, imageSize: imageSize)
+            )
         }
-        completion(texts)
+        completion(observations)
     }
 
-    // 🔸 한국어 + 영어 인식 설정
     request.recognitionLanguages = ["ko-KR", "en-US"]
     request.recognitionLevel = .accurate
     request.usesLanguageCorrection = true
@@ -252,9 +273,8 @@ func recognizeText(from cgImage: CGImage,
     if !customWords.isEmpty {
         request.customWords = customWords
     }
-    
-    let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
 
+    let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
     DispatchQueue.global(qos: .userInitiated).async {
         do {
             try handler.perform([request])
@@ -356,5 +376,197 @@ func fuzzyHangulContains(_ candidate: String, target: String) -> Bool {
         if matched { return true }
     }
     return false
+}
+
+// MARK: - Shape-weighted similarity
+//
+// Score 0…1 of how close two strings are. OCR errors are visual, so each
+// substitution is weighted by how alike the two characters *look* — not by
+// general edit distance. Visually-similar Hangul jamo (ㅏ↔ㅑ, ㅁ↔ㅂ) and
+// confusable Latin/digit pairs (O↔0, l↔I↔1) cost a fraction of an unrelated
+// swap. Whitespace is dropped because OCR invents or swallows spaces.
+//
+// Encoding scheme (set by `decomposeForSimilarity`):
+//   0…18     → 초성 (initial) index
+//   100…120  → 중성 (medial) index + 100
+//   201…227  → 종성 (final) index + 200 (0/no-jongseong is omitted)
+//   1000+x   → non-Hangul scalar x
+
+private func decomposeForSimilarity(_ s: String) -> [Int] {
+    var out: [Int] = []
+    out.reserveCapacity(s.count * 3)
+    for ch in s where !ch.isWhitespace {
+        if let sc = ch.unicodeScalars.first,
+           let d = decomposeHangulSyllable(sc) {
+            out.append(d.0)
+            out.append(100 + d.1)
+            if d.2 != 0 { out.append(200 + d.2) }
+        } else {
+            for sc in ch.unicodeScalars { out.append(1000 + Int(sc.value)) }
+        }
+    }
+    return out
+}
+
+/// Pair of encoded jamo/scalar codes, order-independent.
+private struct ShapeConfusionPair: Hashable {
+    let lo: Int
+    let hi: Int
+    init(_ x: Int, _ y: Int) {
+        self.lo = min(x, y)
+        self.hi = max(x, y)
+    }
+}
+
+/// Table of visually-confusable pairs → substitution cost (0…1).
+/// Lower number = more similar shapes = OCR is more likely to confuse them.
+private let shapeConfusionCosts: [ShapeConfusionPair: Double] = [
+    // ── 초성 (0…18) ─────────────────────────────────────────────
+    .init(6, 7):   0.20,   // ㅁ ↔ ㅂ
+    .init(6, 17):  0.25,   // ㅁ ↔ ㅍ
+    .init(7, 17):  0.20,   // ㅂ ↔ ㅍ
+    .init(0, 15):  0.20,   // ㄱ ↔ ㅋ
+    .init(3, 16):  0.20,   // ㄷ ↔ ㅌ
+    .init(12, 14): 0.20,   // ㅈ ↔ ㅊ
+    .init(2, 5):   0.30,   // ㄴ ↔ ㄹ
+    .init(11, 18): 0.30,   // ㅇ ↔ ㅎ
+    .init(0, 1):   0.15,   // ㄱ ↔ ㄲ (doubled)
+    .init(7, 8):   0.15,   // ㅂ ↔ ㅃ
+    .init(9, 10):  0.15,   // ㅅ ↔ ㅆ
+    .init(3, 4):   0.15,   // ㄷ ↔ ㄸ
+    .init(12, 13): 0.15,   // ㅈ ↔ ㅉ
+
+    // ── 중성 (100…120) ──────────────────────────────────────────
+    .init(100, 102): 0.20, // ㅏ ↔ ㅑ
+    .init(104, 106): 0.20, // ㅓ ↔ ㅕ
+    .init(108, 112): 0.20, // ㅗ ↔ ㅛ
+    .init(113, 117): 0.20, // ㅜ ↔ ㅠ
+    .init(101, 103): 0.20, // ㅐ ↔ ㅒ
+    .init(105, 107): 0.20, // ㅔ ↔ ㅖ
+    .init(118, 119): 0.25, // ㅡ ↔ ㅢ
+    .init(100, 104): 0.40, // ㅏ ↔ ㅓ (mirrored)
+    .init(108, 113): 0.40, // ㅗ ↔ ㅜ (mirrored)
+    .init(101, 105): 0.30, // ㅐ ↔ ㅔ
+    .init(103, 107): 0.30, // ㅒ ↔ ㅖ
+    .init(118, 120): 0.40, // ㅡ ↔ ㅣ (rotated)
+    .init(109, 114): 0.40, // ㅘ ↔ ㅝ
+    .init(100, 120): 0.45, // ㅏ ↔ ㅣ (vertical stroke + horizontal stub vs bare vertical)
+
+    // ── 종성 (201…227) ──────────────────────────────────────────
+    .init(201, 224): 0.20, // 종ㄱ ↔ 종ㅋ
+    .init(207, 225): 0.20, // 종ㄷ ↔ 종ㅌ
+    .init(217, 226): 0.20, // 종ㅂ ↔ 종ㅍ
+    .init(221, 227): 0.30, // 종ㅇ ↔ 종ㅎ
+    .init(204, 208): 0.30, // 종ㄴ ↔ 종ㄹ
+    .init(216, 217): 0.25, // 종ㅁ ↔ 종ㅂ
+    .init(216, 221): 0.30, // 종ㅁ ↔ 종ㅇ
+    .init(201, 202): 0.15, // 종ㄱ ↔ 종ㄲ
+    .init(219, 220): 0.15, // 종ㅅ ↔ 종ㅆ
+
+    // ── Latin / digit (1000 + scalar) ───────────────────────────
+    .init(1000 + 0x4F, 1000 + 0x30): 0.20, // O ↔ 0
+    .init(1000 + 0x6F, 1000 + 0x30): 0.25, // o ↔ 0
+    .init(1000 + 0x6F, 1000 + 0x4F): 0.10, // o ↔ O (case)
+    .init(1000 + 0x6C, 1000 + 0x49): 0.20, // l ↔ I
+    .init(1000 + 0x6C, 1000 + 0x31): 0.20, // l ↔ 1
+    .init(1000 + 0x49, 1000 + 0x31): 0.20, // I ↔ 1
+    .init(1000 + 0x53, 1000 + 0x35): 0.20, // S ↔ 5
+    .init(1000 + 0x73, 1000 + 0x35): 0.30, // s ↔ 5
+    .init(1000 + 0x42, 1000 + 0x38): 0.20, // B ↔ 8
+    .init(1000 + 0x5A, 1000 + 0x32): 0.30, // Z ↔ 2
+    .init(1000 + 0x7A, 1000 + 0x32): 0.30, // z ↔ 2
+    .init(1000 + 0x47, 1000 + 0x36): 0.30, // G ↔ 6
+    .init(1000 + 0x44, 1000 + 0x30): 0.30, // D ↔ 0
+    .init(1000 + 0x63, 1000 + 0x65): 0.40, // c ↔ e
+    .init(1000 + 0x75, 1000 + 0x76): 0.40, // u ↔ v
+    .init(1000 + 0x69, 1000 + 0x6A): 0.40, // i ↔ j
+    .init(1000 + 0x6E, 1000 + 0x68): 0.40, // n ↔ h
+]
+
+/// Visual substitution cost between two encoded codes. 0 means identical,
+/// 1 means visually unrelated.
+private func shapeSubstitutionCost(_ a: Int, _ b: Int) -> Double {
+    if a == b { return 0 }
+    // Cross-category swaps (e.g. 초성 ↔ 중성, jamo ↔ Latin) — always 1.0.
+    if (a / 100) != (b / 100) { return 1.0 }
+    if let cost = shapeConfusionCosts[ShapeConfusionPair(a, b)] { return cost }
+    // ASCII case-insensitive fallback: same letter, different case → tiny cost.
+    if a >= 1000 && b >= 1000 {
+        let sa = a - 1000, sb = b - 1000
+        let la = (sa >= 0x41 && sa <= 0x5A) ? sa + 32 : sa
+        let lb = (sb >= 0x41 && sb <= 0x5A) ? sb + 32 : sb
+        if la == lb { return 0.10 }
+    }
+    return 1.0
+}
+
+/// Insertion/deletion cost. ㅇ (silent initial / nasal final) is the most
+/// frequent OCR drop-or-add, so its indel is discounted.
+private func shapeIndelCost(_ x: Int) -> Double {
+    if x == 11 { return 0.40 }   // 초성 ㅇ
+    if x == 221 { return 0.50 }  // 종성 ㅇ
+    return 1.0
+}
+
+private func shapeWeightedDistance(_ a: [Int], _ b: [Int]) -> Double {
+    if a.isEmpty { return b.reduce(0.0) { $0 + shapeIndelCost($1) } }
+    if b.isEmpty { return a.reduce(0.0) { $0 + shapeIndelCost($1) } }
+    var prev = [Double](repeating: 0, count: b.count + 1)
+    for j in 1...b.count { prev[j] = prev[j - 1] + shapeIndelCost(b[j - 1]) }
+    var curr = [Double](repeating: 0, count: b.count + 1)
+    for i in 1...a.count {
+        curr[0] = prev[0] + shapeIndelCost(a[i - 1])
+        for j in 1...b.count {
+            let sub = prev[j - 1] + shapeSubstitutionCost(a[i - 1], b[j - 1])
+            let del = prev[j] + shapeIndelCost(a[i - 1])
+            let ins = curr[j - 1] + shapeIndelCost(b[j - 1])
+            curr[j] = min(sub, min(del, ins))
+        }
+        swap(&prev, &curr)
+    }
+    return prev[b.count]
+}
+
+/// Returns 0…1 shape similarity between two strings. Higher = more visually
+/// similar at the jamo / glyph level.
+func hangulSimilarity(_ candidate: String, target: String) -> Double {
+    let c = decomposeForSimilarity(candidate)
+    let t = decomposeForSimilarity(target)
+    if c.isEmpty && t.isEmpty { return 1.0 }
+    if c.isEmpty || t.isEmpty { return 0.0 }
+    let dist = shapeWeightedDistance(c, t)
+    let maxLen = max(c.count, t.count)
+    return 1.0 - dist / Double(maxLen)
+}
+
+/// Slides a window over `candidate` looking for the best-matching substring
+/// against `target`. Useful when OCR captures the target embedded in extra
+/// noise (e.g. "  예약하기 ▶" vs target "예약하기").
+func bestSubstringSimilarity(_ candidate: String, target: String) -> Double {
+    let cStripped = candidate.replacingOccurrences(of: " ", with: "")
+    let tStripped = target.replacingOccurrences(of: " ", with: "")
+    if tStripped.isEmpty { return 0.0 }
+    if cStripped.count <= tStripped.count {
+        return hangulSimilarity(cStripped, target: tStripped)
+    }
+    // Hard-coded slack: try window lengths within ±1 of the target so a
+    // missing/extra char still gets compared as a near-match.
+    let cArr = Array(cStripped)
+    let tLen = tStripped.count
+    let minLen = max(1, tLen - 1)
+    let maxLen = min(cArr.count, tLen + 1)
+    var best = 0.0
+    for winLen in minLen...maxLen {
+        let lastStart = cArr.count - winLen
+        for start in 0...lastStart {
+            let sub = String(cArr[start..<(start + winLen)])
+            let score = hangulSimilarity(sub, target: tStripped)
+            if score > best {
+                best = score
+                if best >= 0.999 { return best }
+            }
+        }
+    }
+    return best
 }
 

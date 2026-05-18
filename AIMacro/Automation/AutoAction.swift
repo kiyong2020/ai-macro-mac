@@ -62,9 +62,14 @@ class AutoAction {
     let delay = BehaviorSubject<Double>(value: 0.1)
     let count = BehaviorSubject<Int>(value: 1)
     let text = BehaviorSubject<String>(value: "")
+    /// OCR-specific click repeat count — how many times to click the
+    /// recognised target. Unused by other action types (their repeat count
+    /// lives in `count`; OCR's `count` is repurposed for scan-area size).
+    let clicks = BehaviorSubject<Int>(value: 1)
 
     init(type:ActionType, group: String = "", name:String = "", point: CGPoint = .zero, delay: Double = 0, count: Int = 1,
          text:String = "",
+         clicks: Int = 1,
          runsDisablePopup: Bool = false,
          id: String = UUID().uuidString) {
         self.id = id
@@ -75,6 +80,7 @@ class AutoAction {
         self.delay.onNext(delay)
         self.count.onNext(count)
         self.text.onNext(text)
+        self.clicks.onNext(clicks)
     }
     
     func set(json: [String: Any]) throws {
@@ -95,8 +101,11 @@ class AutoAction {
         if let text = json["text"] as? String {
             self.text.onNext(text)
         }
+        if let clicks = json["clicks"] as? Int {
+            self.clicks.onNext(clicks)
+        }
     }
-    
+
     func toJSON() -> [String: Any] {
         let point = try! point.value()
         return [
@@ -105,6 +114,7 @@ class AutoAction {
             "delay": try! delay.value(),
             "count": try! count.value(),
             "text": try! text.value(),
+            "clicks": try! clicks.value(),
             ]
     }
     
@@ -201,6 +211,7 @@ extension AutoAction {
             delay: (try? delay.value()) ?? 0,
             count: (try? count.value()) ?? 1,
             text: (try? text.value()) ?? "",
+            clicks: (try? clicks.value()) ?? 1,
             runsDisablePopup: runsDisablePopup
         )
         return copy

@@ -229,6 +229,9 @@ final class ActionDetailBuilder {
             card.addRow(label: L("Scan Area"),
                         control: makeOCRAreaPicker(action, disposeBag: disposeBag),
                         hint: "화면에서 직접 드래그하여 OCR 영역의 위치와 크기를 한 번에 지정")
+            card.addRow(label: L("Repeat"),
+                        control: makeClicksField(action, disposeBag: disposeBag, suffix: "회"),
+                        hint: "찾은 위치를 몇 번 클릭할지")
             card.addRow(label: L("Preview"),
                         control: makeActionSnapshotView(action, disposeBag: disposeBag),
                         hint: "영역 지정 직후 캡처된 스캔 영역")
@@ -414,6 +417,37 @@ final class ActionDetailBuilder {
         // back into the field — but skip while the user is editing so we
         // don't yank characters out from under them mid-type.
         action.count
+            .observe(on: MainScheduler.instance)
+            .subscribe(onNext: { [weak field] new in
+                guard let field = field, field.currentEditor() == nil else { return }
+                let s = "\(new)"
+                if field.stringValue != s { field.stringValue = s }
+            })
+            .disposed(by: disposeBag)
+
+        let unit = NSTextField(labelWithString: suffix)
+        unit.font = .systemFont(ofSize: 11)
+        unit.textColor = .tertiaryLabelColor
+
+        let row = NSStackView(views: [field, unit])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 6
+        return row
+    }
+
+    /// Repeat-clicks field for the OCR action. Backed by `action.clicks`
+    /// (separate from `action.count`, which the OCR action repurposes for
+    /// the scan-area size encoding).
+    private func makeClicksField(_ action: AutoAction, disposeBag: DisposeBag, suffix: String) -> NSView {
+        let field = NSTextField(string: String((try? action.clicks.value()) ?? 1))
+        field.bezelStyle = .roundedBezel
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: 110).isActive = true
+        field.delegate = TextFieldChangeDelegate.attach(to: field) { [weak action] new in
+            action?.clicks.onNext(max(1, Int(new) ?? 1))
+        }
+        action.clicks
             .observe(on: MainScheduler.instance)
             .subscribe(onNext: { [weak field] new in
                 guard let field = field, field.currentEditor() == nil else { return }
