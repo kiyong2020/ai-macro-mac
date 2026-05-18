@@ -47,19 +47,37 @@ final class ScenarioListEditorWindowController: NSWindowController {
     private var deleteButton: NSButton!
     private var detailContainer: NSView!
 
-    /// What the user has selected in the outline. `nil` when nothing is
-    /// selected (e.g. the list is empty).
+    /// What the user has selected in the outline. Multi-select via shift /
+    /// cmd is enabled — many actions operate on the whole selection
+    /// (delete, drag), while name editing only kicks in when exactly one
+    /// item is selected.
     private enum SelectionKind { case group, scenario }
-    private struct Selection {
+    private struct Selection: Equatable {
         let kind: SelectionKind
         let id: UUID
     }
-    private var selection: Selection?
+
+    /// Live selection derived from `outlineView.selectedRowIndexes`. Kept
+    /// as a computed property so we don't have to keep a parallel `var`
+    /// in sync with NSOutlineView's own selection state.
+    private var selections: [Selection] {
+        var out: [Selection] = []
+        for row in outlineView.selectedRowIndexes.sorted() {
+            if let item = outlineView.item(atRow: row),
+               let parsed = parseItem(item) {
+                out.append(Selection(kind: parsed.kind, id: parsed.id))
+            }
+        }
+        return out
+    }
+
+    private var primarySelection: Selection? { selections.first }
 
     /// ID of the entity whose name is currently in the right-pane field.
     /// Looked up at commit time so a pending edit always lands on the
     /// right entity even if the tree was reordered (drag-to-reorder) or
-    /// reloaded out from under us between focus-loss and commit.
+    /// reloaded out from under us between focus-loss and commit. Only
+    /// non-nil while exactly one item is selected.
     private var editingId: UUID?
     private var editingKind: SelectionKind?
 
@@ -88,13 +106,13 @@ final class ScenarioListEditorWindowController: NSWindowController {
     /// (referenced by flat index, matching the main window's popup).
     func present(selectedScenarioIndex: Int) {
         let flat = ScenarioStore.shared.scenarios
-        let preferred: Selection?
+        let preferred: [Selection]
         if flat.indices.contains(selectedScenarioIndex) {
-            preferred = Selection(kind: .scenario, id: flat[selectedScenarioIndex].id)
+            preferred = [Selection(kind: .scenario, id: flat[selectedScenarioIndex].id)]
         } else if let first = flat.first {
-            preferred = Selection(kind: .scenario, id: first.id)
+            preferred = [Selection(kind: .scenario, id: first.id)]
         } else {
-            preferred = nil
+            preferred = []
         }
         reload(selecting: preferred)
         if !(window?.isVisible ?? false) {
@@ -122,7 +140,7 @@ final class ScenarioListEditorWindowController: NSWindowController {
         let outline = NSOutlineView()
         outline.headerView = nil
         outline.rowHeight = 22
-        outline.allowsMultipleSelection = false
+        outline.allowsMultipleSelection = true
         outline.allowsEmptySelection = true
         outline.usesAlternatingRowBackgroundColors = true
         outline.style = .inset
@@ -232,7 +250,7 @@ final class ScenarioListEditorWindowController: NSWindowController {
             queue: .main
         ) { [weak self] _ in
             guard let self = self, self.window?.isVisible == true else { return }
-            self.reload(selecting: self.selection)
+            self.reload(selecting: self.selections)
         }
     }
 
@@ -276,7 +294,7 @@ final class ScenarioListEditorWindowController: NSWindowController {
 
     /// Repopulate the outline + restore selection. The expand/collapse
     /// state for each group is re-applied from `ScenarioGroup.isExpanded`.
-    private func reload(selecting target: Selection?) {
+    private func reload(selecting targets: [Selection]) {
         isReloading = true
         outlineView.reloadData()
         // Re-apply expand state. We do this after reloadData so the
@@ -293,39 +311,47 @@ final class ScenarioListEditorWindowController: NSWindowController {
         }
         isReloading = false
 
-        applySelection(target)
+        applySelections(targets)
         refreshDetailPane()
     }
 
-    private func applySelection(_ target: Selection?) {
-        guard let target = target else {
-            selection = nil
+    private func applySelections(_ targets: [Selection]) {
+        guard !targets.isEmpty else {
+            isReloading = true
             outlineView.deselectAll(nil)
+            isReloading = false
             return
         }
-        let item: NSString = (target.kind == .group)
-            ? groupItemId(target.id)
-            : scenarioItemId(target.id)
-        // Expand the parent group if the target is a scenario inside one.
-        if target.kind == .scenario,
-           let parent = parentGroupId(forScenarioId: target.id) {
-            outlineView.expandItem(groupItemId(parent))
+        // Expand parent groups so child rows are addressable.
+        for target in targets where target.kind == .scenario {
+            if let parent = parentGroupId(forScenarioId: target.id) {
+                outlineView.expandItem(groupItemId(parent))
+            }
         }
-        let row = outlineView.row(forItem: item)
-        guard row >= 0 else {
-            // Fall back to the first scenario if the target vanished.
+        var rows = IndexSet()
+        for target in targets {
+            let item: NSString = (target.kind == .group)
+                ? groupItemId(target.id)
+                : scenarioItemId(target.id)
+            let row = outlineView.row(forItem: item)
+            if row >= 0 { rows.insert(row) }
+        }
+        if rows.isEmpty {
+            // All targets vanished — fall back to the first scenario.
             if let first = ScenarioStore.shared.scenarios.first {
-                applySelection(Selection(kind: .scenario, id: first.id))
+                applySelections([Selection(kind: .scenario, id: first.id)])
             } else {
-                selection = nil
+                isReloading = true
                 outlineView.deselectAll(nil)
+                isReloading = false
             }
             return
         }
-        selection = target
         isReloading = true
-        outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-        outlineView.scrollRowToVisible(row)
+        outlineView.selectRowIndexes(rows, byExtendingSelection: false)
+        if let first = rows.first {
+            outlineView.scrollRowToVisible(first)
+        }
         isReloading = false
     }
 
@@ -340,7 +366,9 @@ final class ScenarioListEditorWindowController: NSWindowController {
 
     private func refreshDetailPane() {
         let store = ScenarioStore.shared
-        guard let sel = selection else {
+        let sels = selections
+        // Nothing selected → empty state.
+        guard let first = sels.first else {
             nameField.stringValue = ""
             nameField.isEnabled = false
             actionCountLabel.stringValue = ""
@@ -349,9 +377,37 @@ final class ScenarioListEditorWindowController: NSWindowController {
             editingKind = nil
             return
         }
-        switch sel.kind {
+        // Multi-select → show summary; rename is disabled (only one item
+        // at a time can be renamed) but delete operates on the whole set.
+        if sels.count > 1 {
+            let groupCount = sels.filter { $0.kind == .group }.count
+            let scenarioCount = sels.count - groupCount
+            var parts: [String] = []
+            if groupCount > 0    { parts.append("그룹 \(groupCount)개") }
+            if scenarioCount > 0 { parts.append("플로우 \(scenarioCount)개") }
+            actionCountLabel.stringValue = parts.joined(separator: " · ") + " 선택됨"
+            nameField.stringValue = ""
+            nameField.placeholderString = "여러 항목 — 이름 변경 불가"
+            nameField.isEnabled = false
+            deleteButton.title = "선택 항목 삭제"
+            // Block "선택 항목 삭제" when it would wipe out the last
+            // scenario (runner needs at least one).
+            let scenarioSelectionIds = Set(sels.filter { $0.kind == .scenario }.map { $0.id })
+            let scenariosLostIfGroupsDeleted = sels.filter { $0.kind == .group }
+                .compactMap { store.group(id: $0.id) }
+                .flatMap { $0.scenarios.map { $0.id } }
+            let removedScenarioIds = scenarioSelectionIds.union(scenariosLostIfGroupsDeleted)
+            let surviving = store.scenarios.filter { !removedScenarioIds.contains($0.id) }.count
+            deleteButton.isEnabled = surviving > 0
+            editingId = nil
+            editingKind = nil
+            return
+        }
+        // Exactly one selected.
+        nameField.placeholderString = ""
+        switch first.kind {
         case .scenario:
-            guard let s = store.scenario(id: sel.id) else { return }
+            guard let s = store.scenario(id: first.id) else { return }
             nameField.stringValue = s.name
             nameField.isEnabled = true
             actionCountLabel.stringValue = "동작 \(s.actions.count)개"
@@ -360,15 +416,15 @@ final class ScenarioListEditorWindowController: NSWindowController {
             deleteButton.isEnabled = store.scenarios.count > 1
             deleteButton.title = "삭제"
         case .group:
-            guard let g = store.group(id: sel.id) else { return }
+            guard let g = store.group(id: first.id) else { return }
             nameField.stringValue = g.name
             nameField.isEnabled = true
             actionCountLabel.stringValue = "그룹 · 플로우 \(g.scenarios.count)개"
             deleteButton.isEnabled = true
             deleteButton.title = "그룹 삭제"
         }
-        editingId = sel.id
-        editingKind = sel.kind
+        editingId = first.id
+        editingKind = first.kind
     }
 
     // MARK: - + button menu
@@ -383,11 +439,13 @@ final class ScenarioListEditorWindowController: NSWindowController {
         empty.target = self
         menu.addItem(empty)
 
+        // "복제" only makes sense for exactly one scenario.
+        let dupOnly = (selections.count == 1 && primarySelection?.kind == .scenario)
         let duplicate = NSMenuItem(title: "현재 플로우 복제",
                                    action: #selector(duplicateSelected(_:)),
                                    keyEquivalent: "")
         duplicate.target = self
-        duplicate.isEnabled = (selection?.kind == .scenario)
+        duplicate.isEnabled = dupOnly
         menu.addItem(duplicate)
 
         let record = NSMenuItem(title: "시퀀스로 기록",
@@ -411,9 +469,9 @@ final class ScenarioListEditorWindowController: NSWindowController {
     @objc private func addEmpty(_ sender: Any?) {
         let store = ScenarioStore.shared
         let baseName: String
-        if let sel = selection, sel.kind == .scenario, let s = store.scenario(id: sel.id) {
+        if let sel = primarySelection, sel.kind == .scenario, let s = store.scenario(id: sel.id) {
             baseName = s.name
-        } else if let sel = selection, sel.kind == .group, let g = store.group(id: sel.id) {
+        } else if let sel = primarySelection, sel.kind == .group, let g = store.group(id: sel.id) {
             baseName = g.name
         } else {
             baseName = "Flow"
@@ -421,7 +479,7 @@ final class ScenarioListEditorWindowController: NSWindowController {
         let newName = uniqueScenarioName(candidate: "New \(baseName)")
         let newScenario = Scenario(name: newName, actions: [])
         store.add(newScenario)
-        reload(selecting: Selection(kind: .scenario, id: newScenario.id))
+        reload(selecting: [Selection(kind: .scenario, id: newScenario.id)])
         notifySelectionChanged()
         onMutated?()
         AppLogger.shared.log("➕ 플로우 추가: \(newName)")
@@ -429,12 +487,13 @@ final class ScenarioListEditorWindowController: NSWindowController {
 
     @objc private func duplicateSelected(_ sender: Any?) {
         let store = ScenarioStore.shared
-        guard let sel = selection, sel.kind == .scenario,
+        guard let sel = primarySelection, sel.kind == .scenario,
+              selections.count == 1,
               let source = store.scenario(id: sel.id),
               let flatIndex = store.scenarios.firstIndex(where: { $0.id == sel.id }) else { return }
         let newName = uniqueScenarioName(basedOn: source.name)
         guard let copy = store.duplicate(at: flatIndex, newName: newName) else { return }
-        reload(selecting: Selection(kind: .scenario, id: copy.id))
+        reload(selecting: [Selection(kind: .scenario, id: copy.id)])
         notifySelectionChanged()
         onMutated?()
         AppLogger.shared.log("➕ 플로우 복제: \(source.name) → \(newName)")
@@ -444,7 +503,7 @@ final class ScenarioListEditorWindowController: NSWindowController {
         let newName = uniqueGroupName(candidate: "새 그룹")
         let g = ScenarioGroup(name: newName, isExpanded: true)
         ScenarioStore.shared.addGroup(g)
-        reload(selecting: Selection(kind: .group, id: g.id))
+        reload(selecting: [Selection(kind: .group, id: g.id)])
         onMutated?()
         AppLogger.shared.log("➕ 그룹 추가: \(newName)")
     }
@@ -483,6 +542,8 @@ final class ScenarioListEditorWindowController: NSWindowController {
 
     private func applyPendingNameEdit() {
         let store = ScenarioStore.shared
+        // Rename only fires when exactly one item is selected — multi-
+        // select disables the field, so editingId is nil there.
         guard let id = editingId, let kind = editingKind else { return }
         let trimmed = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         switch kind {
@@ -501,9 +562,6 @@ final class ScenarioListEditorWindowController: NSWindowController {
             }
             store.renameGroup(id: id, to: trimmed)
         }
-        // Refresh just the affected row by reloading the whole outline —
-        // cheap enough for the sizes the editor handles, and avoids the
-        // bookkeeping of re-resolving a row index.
         isReloading = true
         outlineView.reloadData()
         isReloading = false
@@ -513,40 +571,92 @@ final class ScenarioListEditorWindowController: NSWindowController {
 
     @objc private func onDelete(_ sender: Any?) {
         let store = ScenarioStore.shared
-        guard let sel = selection else { return }
+        let sels = selections
+        guard !sels.isEmpty else { return }
+
+        // Single-selection: keep the per-kind confirmation copy the user
+        // already knows.
+        if sels.count == 1, let only = sels.first {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "삭제")
+            alert.addButton(withTitle: "취소")
+            switch only.kind {
+            case .scenario:
+                guard store.scenarios.count > 1, let s = store.scenario(id: only.id) else {
+                    AppLogger.shared.log("⚠️ 마지막 플로우는 삭제할 수 없습니다.")
+                    return
+                }
+                alert.messageText = "플로우를 삭제하시겠습니까?"
+                alert.informativeText = s.name
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+                store.deleteScenario(id: only.id)
+                AppLogger.shared.log("🗑 플로우 삭제: \(s.name)")
+            case .group:
+                guard let g = store.group(id: only.id) else { return }
+                alert.messageText = "그룹을 삭제하시겠습니까?"
+                alert.informativeText = g.scenarios.isEmpty
+                    ? "\(g.name) (빈 그룹)"
+                    : "\(g.name) — 안의 플로우 \(g.scenarios.count)개는 그룹 밖으로 옮겨집니다."
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+                store.deleteGroup(id: only.id, promotingScenarios: true)
+                AppLogger.shared.log("🗑 그룹 삭제: \(g.name)")
+            }
+            reload(selecting: store.scenarios.first.map {
+                [Selection(kind: .scenario, id: $0.id)]
+            } ?? [])
+            notifySelectionChanged()
+            onMutated?()
+            return
+        }
+
+        // Multi-selection. We pre-validate that at least one scenario
+        // would remain, otherwise the runner has nothing to play.
+        let scenarioIdsDirect = Set(sels.filter { $0.kind == .scenario }.map { $0.id })
+        let groupScenarioIds = sels.filter { $0.kind == .group }
+            .compactMap { store.group(id: $0.id) }
+            .flatMap { $0.scenarios.map { $0.id } }
+        // When a group is selected we promote its scenarios (not delete
+        // them), so they don't count as "removed".
+        let removed = scenarioIdsDirect
+        let surviving = store.scenarios.filter { !removed.contains($0.id) }.count
+        if surviving < 1 {
+            AppLogger.shared.log("⚠️ 모든 플로우를 한 번에 삭제할 수 없습니다.")
+            return
+        }
+
+        let groupCount = sels.filter { $0.kind == .group }.count
+        let scenarioCount = sels.count - groupCount
+        var parts: [String] = []
+        if groupCount > 0    { parts.append("그룹 \(groupCount)개") }
+        if scenarioCount > 0 { parts.append("플로우 \(scenarioCount)개") }
+        let summary = parts.joined(separator: " · ")
+        var detail = "\(summary) 를 삭제합니다."
+        if !groupScenarioIds.isEmpty {
+            detail += " 그룹 안의 플로우 \(groupScenarioIds.count)개는 그룹 밖으로 옮겨집니다."
+        }
         let alert = NSAlert()
         alert.alertStyle = .warning
+        alert.messageText = "선택 항목을 삭제하시겠습니까?"
+        alert.informativeText = detail
         alert.addButton(withTitle: "삭제")
         alert.addButton(withTitle: "취소")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        switch sel.kind {
-        case .scenario:
-            guard store.scenarios.count > 1, let s = store.scenario(id: sel.id) else {
-                AppLogger.shared.log("⚠️ 마지막 플로우는 삭제할 수 없습니다.")
-                return
-            }
-            alert.messageText = "플로우를 삭제하시겠습니까?"
-            alert.informativeText = s.name
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-            store.deleteScenario(id: sel.id)
-            AppLogger.shared.log("🗑 플로우 삭제: \(s.name)")
-        case .group:
-            guard let g = store.group(id: sel.id) else { return }
-            alert.messageText = "그룹을 삭제하시겠습니까?"
-            alert.informativeText = g.scenarios.isEmpty
-                ? "\(g.name) (빈 그룹)"
-                : "\(g.name) — 안의 플로우 \(g.scenarios.count)개는 그룹 밖으로 옮겨집니다."
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        // Order matters when deleting groups + scenarios in the same pass:
+        // promote group children first (so their UUIDs stay alive in the
+        // tree), then drop the standalone scenarios.
+        for sel in sels where sel.kind == .group {
             store.deleteGroup(id: sel.id, promotingScenarios: true)
-            AppLogger.shared.log("🗑 그룹 삭제: \(g.name)")
         }
+        for sel in sels where sel.kind == .scenario {
+            store.deleteScenario(id: sel.id)
+        }
+        AppLogger.shared.log("🗑 선택 항목 삭제: \(summary)")
 
-        // Fall back to the first remaining scenario after deletion so the
-        // detail pane doesn't sit on a dead reference.
-        let fallback: Selection? = store.scenarios.first.map {
-            Selection(kind: .scenario, id: $0.id)
-        }
-        reload(selecting: fallback)
+        reload(selecting: store.scenarios.first.map {
+            [Selection(kind: .scenario, id: $0.id)]
+        } ?? [])
         notifySelectionChanged()
         onMutated?()
     }
@@ -557,7 +667,10 @@ final class ScenarioListEditorWindowController: NSWindowController {
     }
 
     private func notifySelectionChanged() {
-        guard let sel = selection, sel.kind == .scenario,
+        // Main popup only tracks a single scenario; if the user has a
+        // group or multi-selection we leave the popup as-is.
+        guard let sel = primarySelection, sel.kind == .scenario,
+              selections.count == 1,
               ScenarioStore.shared.scenario(id: sel.id) != nil else { return }
         onScenarioSelected?(sel.id)
     }
@@ -617,18 +730,24 @@ extension ScenarioListEditorWindowController: NSOutlineViewDataSource {
                      validateDrop info: NSDraggingInfo,
                      proposedItem item: Any?,
                      proposedChildIndex index: Int) -> NSDragOperation {
-        guard let token = info.draggingPasteboard.pasteboardItems?
-                .first?.string(forType: Self.dragType),
-              let dragged = parseToken(token) else { return [] }
+        let dragged = parsedDraggedItems(info)
+        guard !dragged.isEmpty else { return [] }
 
-        if dragged.kind == .group {
+        // Mixed-kind drag (group + scenario in the same selection) is
+        // rejected — the destinations have different rules and asking the
+        // user to disambiguate at drop time is worse than just disabling.
+        let hasGroup    = dragged.contains { $0.kind == .group }
+        let hasScenario = dragged.contains { $0.kind == .scenario }
+        if hasGroup && hasScenario { return [] }
+
+        if hasGroup {
             // Groups stay at the root and cannot nest.
             if item == nil && index >= 0 { return .move }
             return []
         }
 
-        // Scenario: can land at root or inside a group, but not ON a
-        // scenario (NSOutlineView passes childIndex == -1 for "drop on item").
+        // Scenarios: not ON a scenario row (NSOutlineView passes
+        // childIndex == -1 for "drop on item").
         if let parsed = parseItem(item), parsed.kind == .scenario {
             return []
         }
@@ -639,63 +758,86 @@ extension ScenarioListEditorWindowController: NSOutlineViewDataSource {
                      acceptDrop info: NSDraggingInfo,
                      item: Any?,
                      childIndex index: Int) -> Bool {
-        guard let token = info.draggingPasteboard.pasteboardItems?
-                .first?.string(forType: Self.dragType),
-              let dragged = parseToken(token) else { return false }
-
+        let dragged = parsedDraggedItems(info)
+        guard !dragged.isEmpty else { return false }
         let store = ScenarioStore.shared
 
-        if dragged.kind == .group {
-            // Top-level reorder among other top-level nodes. NSOutlineView
-            // gives us the pre-removal target index; adjust for the
-            // extraction so the group lands where the user intended.
-            guard let from = store.tree.firstIndex(where: {
-                if case .group(let g) = $0 { return g.id == dragged.id }
-                return false
-            }) else { return false }
+        // Validated to be homogeneous in validateDrop.
+        let isGroups = dragged.allSatisfy { $0.kind == .group }
+
+        if isGroups {
+            // Top-level reorder. Process in drag order, sliding `dest`
+            // forward after each landed group so subsequent items land
+            // contiguously to the right.
             var dest = (index < 0) ? store.tree.count : index
-            if dest > from { dest -= 1 }
-            if dest == from { return false }
-            store.moveGroup(id: dragged.id, toTopIndex: dest)
-            reload(selecting: Selection(kind: .group, id: dragged.id))
+            for d in dragged {
+                guard let from = store.tree.firstIndex(where: {
+                    if case .group(let g) = $0 { return g.id == d.id }
+                    return false
+                }) else { continue }
+                var adjustedDest = dest
+                if adjustedDest > from { adjustedDest -= 1 }
+                if adjustedDest == from {
+                    // Already at the right slot — skip the move but keep
+                    // sliding dest forward so the next item lands next to it.
+                    dest = from + 1
+                    continue
+                }
+                store.moveGroup(id: d.id, toTopIndex: adjustedDest)
+                dest = adjustedDest + 1
+            }
+            reload(selecting: dragged.map { Selection(kind: .group, id: $0.id) })
             onMutated?()
             return true
         }
 
-        // Scenario drop. Resolve source path so we can adjust the dest
-        // index for same-container moves.
-        let sourcePath = findScenarioSourcePath(scenarioId: dragged.id)
+        // Scenarios.
         let targetGroupId: UUID? = {
             if let parsed = parseItem(item), parsed.kind == .group { return parsed.id }
             return nil
         }()
-
-        // Effective child-count of the destination container.
         let destContainerCount: Int = {
             if let gid = targetGroupId {
                 return store.group(id: gid)?.scenarios.count ?? 0
             }
             return store.tree.count
         }()
-
-        // Normalise -1 ("drop on group") to "end of group's children".
         var dest = (index < 0) ? destContainerCount : index
 
-        // Same container → user-visible drop index is pre-removal, so
-        // shift down once we extract the source.
-        if let sp = sourcePath {
+        for d in dragged {
+            // Re-resolve each scenario's path between moves — earlier
+            // moves may have shifted its index within its parent.
+            guard let sp = findScenarioSourcePath(scenarioId: d.id) else { continue }
+            var adjustedDest = dest
             let sameContainer = (sp.parentGroupId == targetGroupId)
-            if sameContainer {
-                if dest > sp.indexWithinParent { dest -= 1 }
-                if dest == sp.indexWithinParent { return false }
+            if sameContainer && adjustedDest > sp.indexWithinParent {
+                adjustedDest -= 1
             }
+            if sameContainer && adjustedDest == sp.indexWithinParent {
+                // No-op move; slide dest forward to land the next item right after.
+                dest = adjustedDest + 1
+                continue
+            }
+            store.moveScenario(id: d.id, intoGroup: targetGroupId, at: adjustedDest)
+            dest = adjustedDest + 1
         }
-
-        store.moveScenario(id: dragged.id, intoGroup: targetGroupId, at: dest)
-        reload(selecting: Selection(kind: .scenario, id: dragged.id))
+        reload(selecting: dragged.map { Selection(kind: .scenario, id: $0.id) })
         notifySelectionChanged()
         onMutated?()
         return true
+    }
+
+    /// Parse every pasteboard entry from a multi-row drag into typed IDs.
+    private func parsedDraggedItems(_ info: NSDraggingInfo) -> [(kind: SelectionKind, id: UUID)] {
+        guard let items = info.draggingPasteboard.pasteboardItems else { return [] }
+        var out: [(kind: SelectionKind, id: UUID)] = []
+        for item in items {
+            if let s = item.string(forType: Self.dragType),
+               let parsed = parseToken(s) {
+                out.append(parsed)
+            }
+        }
+        return out
     }
 
     /// Where the dragged scenario lives right now: which group (nil for
@@ -765,18 +907,6 @@ extension ScenarioListEditorWindowController: NSOutlineViewDelegate {
     func outlineViewSelectionDidChange(_ notification: Notification) {
         if isReloading { return }
         applyPendingNameEdit()
-        let row = outlineView.selectedRow
-        if row < 0 {
-            selection = nil
-            refreshDetailPane()
-            return
-        }
-        let item = outlineView.item(atRow: row)
-        if let parsed = parseItem(item) {
-            selection = Selection(kind: parsed.kind, id: parsed.id)
-        } else {
-            selection = nil
-        }
         refreshDetailPane()
         notifySelectionChanged()
     }
