@@ -100,6 +100,26 @@ final class FlowModeStore {
         save()
     }
 
+    /// Move a flow mode from one position to another. The first slot
+    /// (index 0) is reserved for the default mode and must not move —
+    /// callers are responsible for keeping the source/destination ≥ 1.
+    func move(from sourceIndex: Int, to destIndex: Int) {
+        guard flowModes.indices.contains(sourceIndex) else { return }
+        let clampedDest = max(0, min(destIndex, flowModes.count - 1))
+        guard sourceIndex != clampedDest else { return }
+        let item = flowModes.remove(at: sourceIndex)
+        flowModes.insert(item, at: clampedDest)
+        save()
+    }
+
+    func flowMode(id: UUID) -> FlowMode? {
+        flowModes.first(where: { $0.id == id })
+    }
+
+    func index(of id: UUID) -> Int? {
+        flowModes.firstIndex(where: { $0.id == id })
+    }
+
     // MARK: - Action mutations
 
     func insertAction(_ action: AutoAction,

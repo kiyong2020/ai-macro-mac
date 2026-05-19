@@ -88,12 +88,11 @@ class ViewController: NSViewController {
     /// Storyboard settings gear button, captured in `setupSettingsButtonIcon()`
     /// so other top-right widgets (e.g. the flow-mode picker) can anchor to it.
     private var settingsButton: NSButton?
-    /// FlowMode picker placed just below the settings gear. Populated from
-    /// `FlowModeStore` and refreshed on `FlowModeStore.didChangeNotification`.
-    private var flowModePopup: NSPopUpButton!
-    /// Anchor button for the FlowMode rename/delete popover (mirrors
-    /// `scenarioButton`).
-    private var flowModeEditButton: NSButton!
+    /// FlowMode picker button placed just below the settings gear. Mirrors
+    /// `scenarioButton`: shows the active FlowMode name and opens
+    /// `FlowModeListEditorWindowController` on click. Refreshed on
+    /// `FlowModeStore.didChangeNotification`.
+    private var flowModeButton: NSButton!
     private var currentFlowModeIndex: Int = 0
 
     /// Backs undo/redo for scenario + action edits. The Edit menu's
@@ -769,12 +768,21 @@ class ViewController: NSViewController {
         scenarioButton.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(scenarioButton)
 
+        let scenarioLabel = NSTextField(labelWithString: "플로우")
+        scenarioLabel.textColor = .secondaryLabelColor
+        scenarioLabel.font = .systemFont(ofSize: 11)
+        scenarioLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(scenarioLabel)
+
         NSLayoutConstraint.activate([
             // Pin to the leading edge with the same 14pt inset the redesign
             // uses for its toolbar — the storyboard's hidden segmented
             // control was positioned further right and we no longer want to
             // inherit that offset.
-            scenarioButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
+            scenarioLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
+            scenarioLabel.centerYAnchor.constraint(equalTo: scenarioButton.centerYAnchor),
+
+            scenarioButton.leadingAnchor.constraint(equalTo: scenarioLabel.trailingAnchor, constant: 6),
             scenarioButton.topAnchor.constraint(equalTo: groupTab.topAnchor),
             scenarioButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
         ])
@@ -853,40 +861,25 @@ class ViewController: NSViewController {
         }
     }
 
-    /// Build the FlowMode picker + edit button and pin it just below the
-    /// settings gear in the top-right corner. Falls back to the view's
-    /// top-trailing if the settings button wasn't found (storyboard mismatch
-    /// — shouldn't happen).
+    /// Build the FlowMode picker button and pin it just below the settings
+    /// gear in the top-right corner. Mirrors `scenarioButton`: clicking
+    /// opens the FlowMode manager popup window.
     private func setupFlowModePicker() {
-        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
-        popup.target = self
-        popup.action = #selector(onChangeFlowMode(_:))
-        popup.controlSize = .small
-        popup.translatesAutoresizingMaskIntoConstraints = false
-        flowModePopup = popup
-
-        let addBtn = NSButton(title: "＋",
+        let button = NSButton(title: "",
                               target: self,
-                              action: #selector(onAddFlowMode(_:)))
-        addBtn.bezelStyle = .roundRect
-        addBtn.controlSize = .small
-        addBtn.translatesAutoresizingMaskIntoConstraints = false
-        addBtn.toolTip = L("Add flow")
+                              action: #selector(showFlowModeListEditor(_:)))
+        button.bezelStyle = .roundRect
+        button.controlSize = .small
+        button.toolTip = L("Manage flow modes")
+        button.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(button)
+        flowModeButton = button
 
-        let editBtn = NSButton(title: "편집",
-                               target: self,
-                               action: #selector(showFlowModeEditPopover))
-        editBtn.bezelStyle = .roundRect
-        editBtn.controlSize = .small
-        editBtn.translatesAutoresizingMaskIntoConstraints = false
-        editBtn.toolTip = L("Rename / delete flow")
-        flowModeEditButton = editBtn
-
-        let stack = NSStackView(views: [addBtn, popup, editBtn])
-        stack.orientation = .horizontal
-        stack.spacing = 6
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(stack)
+        let modeLabel = NSTextField(labelWithString: "모드")
+        modeLabel.textColor = .secondaryLabelColor
+        modeLabel.font = .systemFont(ofSize: 11)
+        modeLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(modeLabel)
 
         let topAnchor: NSLayoutYAxisAnchor
         let trailingAnchor: NSLayoutXAxisAnchor
@@ -902,125 +895,66 @@ class ViewController: NSViewController {
         }
 
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: topConstant),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            popup.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+            button.topAnchor.constraint(equalTo: topAnchor, constant: topConstant),
+            button.trailingAnchor.constraint(equalTo: trailingAnchor),
+            button.widthAnchor.constraint(greaterThanOrEqualToConstant: 140),
+
+            modeLabel.trailingAnchor.constraint(equalTo: button.leadingAnchor, constant: -6),
+            modeLabel.centerYAnchor.constraint(equalTo: button.centerYAnchor),
         ])
 
-        refreshFlowModePopup()
+        refreshFlowModeButton()
 
         NotificationCenter.default.addObserver(
             forName: FlowModeStore.didChangeNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.refreshFlowModePopup()
+            self?.refreshFlowModeButton()
             // `.nextScenario` detail rows are keyed by the FlowMode list,
             // so rebuild the detail pane when modes are added/renamed/deleted.
             self?.refreshDetailPane()
         }
     }
 
-    private func refreshFlowModePopup() {
-        guard let popup = flowModePopup else { return }
-        popup.removeAllItems()
+    /// Update the FlowMode button's title to the currently-selected mode's
+    /// name. Clamps `currentFlowModeIndex` to the store's bounds.
+    private func refreshFlowModeButton() {
+        guard let button = flowModeButton else { return }
         let modes = FlowModeStore.shared.flowModes
-        for mode in modes {
-            popup.addItem(withTitle: mode.name)
-        }
         let safeIndex = min(max(0, currentFlowModeIndex), modes.count - 1)
         if modes.indices.contains(safeIndex) {
-            popup.selectItem(at: safeIndex)
             currentFlowModeIndex = safeIndex
+            button.title = modes[safeIndex].name
+        } else {
+            button.title = L("Manage flow modes")
         }
-        updateFlowModeEditButtonState()
     }
 
-    @objc private func onChangeFlowMode(_ sender: Any?) {
-        let idx = flowModePopup.indexOfSelectedItem
-        guard FlowModeStore.shared.flowModes.indices.contains(idx) else { return }
+    /// Lazy-instantiated manager window for FlowModes. Flat list (no groups),
+    /// with the default mode locked at index 0.
+    private lazy var flowModeListEditor: FlowModeListEditorWindowController = {
+        let editor = FlowModeListEditorWindowController()
+        editor.onMutated = { [weak self] in
+            self?.refreshDetailPane()
+        }
+        editor.onFlowModeSelected = { [weak self] id in
+            self?.selectFlowMode(byId: id)
+        }
+        return editor
+    }()
+
+    @objc private func showFlowModeListEditor(_ sender: Any?) {
+        flowModeListEditor.present(selectedIndex: currentFlowModeIndex)
+    }
+
+    /// Re-point the picker at the FlowMode with the given UUID. Invoked
+    /// from the manager window when the user picks a row there.
+    private func selectFlowMode(byId id: UUID) {
+        let store = FlowModeStore.shared
+        guard let idx = store.index(of: id) else { return }
         currentFlowModeIndex = idx
-        updateFlowModeEditButtonState()
-        // Selection hook — wire to whatever consumes the active FlowMode.
-    }
-
-    /// 첫 번째(디폴트) 모드는 이름 변경/삭제가 불가능하므로 편집 버튼 자체를
-    /// 비활성화한다.
-    private func updateFlowModeEditButtonState() {
-        flowModeEditButton?.isEnabled = currentFlowModeIndex != 0
-    }
-
-    @objc private func onAddFlowMode(_ sender: Any?) {
-        let store = FlowModeStore.shared
-        let baseName = store.flowModes.indices.contains(currentFlowModeIndex)
-            ? store.flowModes[currentFlowModeIndex].name
-            : "Mode"
-        let newName = "New \(baseName)"
-        store.add(FlowMode(name: newName))
-        currentFlowModeIndex = store.flowModes.count - 1
-        refreshFlowModePopup()
-        AppLogger.shared.log("➕ 모드 추가: \(newName)")
-    }
-
-    /// Rename / delete dialog for the currently-selected FlowMode. Mirrors
-    /// `showScenarioEditPopover()`.
-    @objc private func showFlowModeEditPopover() {
-        let store = FlowModeStore.shared
-        guard store.flowModes.indices.contains(currentFlowModeIndex) else { return }
-        let current = store.flowModes[currentFlowModeIndex]
-
-        let alert = NSAlert()
-        alert.messageText = "모드 편집"
-        alert.informativeText = "이름을 변경하거나 모드를 삭제할 수 있습니다."
-
-        let input = NSTextField(string: current.name)
-        input.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
-        alert.accessoryView = input
-
-        alert.addButton(withTitle: "확인")
-        alert.addButton(withTitle: "취소")
-        // 마지막 남은 모드는 삭제할 수 없으므로 버튼 자체를 노출하지 않는다.
-        let canDelete = store.flowModes.count > 1
-        if canDelete {
-            alert.addButton(withTitle: "삭제")
-        }
-
-        let response = alert.runModal()
-        switch response {
-        case .alertFirstButtonReturn:
-            let trimmed = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty,
-                  trimmed != current.name else { return }
-            store.rename(at: currentFlowModeIndex, to: trimmed)
-            refreshFlowModePopup()
-        case .alertThirdButtonReturn where canDelete:
-            onDeleteFlowMode()
-        default:
-            break
-        }
-    }
-
-    @objc private func onDeleteFlowMode() {
-        let store = FlowModeStore.shared
-        guard store.flowModes.count > 1 else {
-            AppLogger.shared.log("⚠️ 마지막 모드는 삭제할 수 없습니다.")
-            return
-        }
-        guard store.flowModes.indices.contains(currentFlowModeIndex) else { return }
-
-        let alert = NSAlert()
-        alert.messageText = "모드를 삭제하시겠습니까?"
-        alert.informativeText = store.flowModes[currentFlowModeIndex].name
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "삭제")
-        alert.addButton(withTitle: "취소")
-        if alert.runModal() == .alertFirstButtonReturn {
-            let removedName = store.flowModes[currentFlowModeIndex].name
-            store.delete(at: currentFlowModeIndex)
-            currentFlowModeIndex = max(0, currentFlowModeIndex - 1)
-            refreshFlowModePopup()
-            AppLogger.shared.log("🗑 모드 삭제: \(removedName)")
-        }
+        refreshFlowModeButton()
     }
 
     /// Update the scenario button's title to the currently-selected scenario
