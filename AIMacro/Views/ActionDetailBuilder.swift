@@ -536,29 +536,40 @@ final class ActionDetailBuilder {
                                               defaultModeId: String,
                                               isDefaultMode: Bool,
                                               disposeBag: DisposeBag) -> NSView {
-        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
-        popup.translatesAutoresizingMaskIntoConstraints = false
+        let button = NSButton(title: "", target: nil, action: nil)
+        button.bezelStyle = .roundRect
+        button.controlSize = .regular
+        button.alignment = .left
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 200).isActive = true
 
         let bridge = NextScenarioPopupBridge(action: action,
-                                             popup: popup,
+                                             button: button,
                                              modeId: modeId,
                                              defaultModeId: defaultModeId,
                                              isDefaultMode: isDefaultMode)
-        popup.target = bridge
-        popup.action = #selector(NextScenarioPopupBridge.changed(_:))
-        objc_setAssociatedObject(popup, &Self.nextScenarioBridgeAssocKey,
+        button.target = bridge
+        button.action = #selector(NextScenarioPopupBridge.buttonClicked(_:))
+        objc_setAssociatedObject(button, &Self.nextScenarioBridgeAssocKey,
                                  bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 
-        bridge.repopulate()
+        bridge.refreshTitle()
 
-        // Keep the items list fresh when scenarios are added / renamed /
-        // removed elsewhere in the app.
+        // Keep the button title fresh when scenarios are added / renamed /
+        // removed elsewhere in the app (the menu is rebuilt on click).
         NotificationCenter.default.rx
             .notification(ScenarioStore.didChangeNotification)
             .observe(on: MainScheduler.instance)
-            .subscribe(onNext: { [weak bridge] _ in bridge?.repopulate() })
+            .subscribe(onNext: { [weak bridge] _ in bridge?.refreshTitle() })
             .disposed(by: disposeBag)
-        return popup
+
+        // Reflect external mutations of the action's text (e.g. another
+        // mode-row writing through the shared payload) in the title.
+        action.text
+            .observe(on: MainScheduler.instance)
+            .subscribe(onNext: { [weak bridge] _ in bridge?.refreshTitle() })
+            .disposed(by: disposeBag)
+        return button
     }
 
     /// `[ TextField | "초/분" popup ]` delay input for one FlowMode row in
@@ -2813,7 +2824,10 @@ private final class DelayUnitBridge: NSObject {
     }
 }
 
-/// Popup bridge for one FlowMode-row in the `.nextScenario` card.
+/// Button bridge for one FlowMode-row in the `.nextScenario` card. The
+/// button shows the current target's name and opens a hierarchical
+/// `NSMenu` on click — top-level scenarios at the root, groups exposed as
+/// submenus — mirroring the management window's tree.
 ///
 /// Menu item `representedObject` encodes the choice:
 /// - `NSNull` → "Use default" (non-default modes only); writes `nil`
@@ -2823,89 +2837,156 @@ private final class DelayUnitBridge: NSObject {
 /// - scenario UUID → writes that UUID for this mode.
 private final class NextScenarioPopupBridge: NSObject {
     private weak var action: AutoAction?
-    private let popup: NSPopUpButton
+    private let button: NSButton
     private let modeId: String
     private let defaultModeId: String
     private let isDefaultMode: Bool
 
     init(action: AutoAction,
-         popup: NSPopUpButton,
+         button: NSButton,
          modeId: String,
          defaultModeId: String,
          isDefaultMode: Bool) {
         self.action = action
-        self.popup = popup
+        self.button = button
         self.modeId = modeId
         self.defaultModeId = defaultModeId
         self.isDefaultMode = isDefaultMode
     }
 
-    /// Rebuild the popup's items from the current `ScenarioStore` and
-    /// restore selection from the action's per-mode target.
-    func repopulate() {
-        popup.removeAllItems()
+    /// Update the button title from the action's current per-mode target.
+    /// - Non-default modes: `nil` override → "Use default"; explicit → its label.
+    /// - Default mode: explicit if present, otherwise the legacy bare value
+    ///   (visual continuity for unmigrated actions), otherwise "Next in list".
+    func refreshTitle() {
+        let target = resolveCurrentTarget()
+        button.title = labelForTarget(target)
+    }
+
+    @objc func buttonClicked(_ sender: NSButton) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
 
         if !isDefaultMode {
             let useDefault = NSMenuItem(
                 title: NSLocalizedString("Use default", comment: ""),
-                action: nil, keyEquivalent: "")
-            useDefault.representedObject = NSNull()
-            popup.menu?.addItem(useDefault)
+                action: #selector(pickUseDefault(_:)),
+                keyEquivalent: "")
+            useDefault.target = self
+            menu.addItem(useDefault)
         }
 
         let nextInList = NSMenuItem(
             title: NSLocalizedString("Next in list", comment: ""),
-            action: nil, keyEquivalent: "")
-        nextInList.representedObject = ""
-        popup.menu?.addItem(nextInList)
+            action: #selector(pickNextInList(_:)),
+            keyEquivalent: "")
+        nextInList.target = self
+        menu.addItem(nextInList)
 
-        for scenario in ScenarioStore.shared.scenarios {
-            let item = NSMenuItem(title: scenario.name, action: nil, keyEquivalent: "")
-            item.representedObject = scenario.id.uuidString
-            popup.menu?.addItem(item)
+        let store = ScenarioStore.shared
+        if !store.tree.isEmpty {
+            menu.addItem(.separator())
+        }
+        for node in store.tree {
+            switch node {
+            case .scenario(let s):
+                menu.addItem(makeScenarioItem(s))
+            case .group(let g):
+                let groupItem = NSMenuItem(title: g.name, action: nil, keyEquivalent: "")
+                let sub = NSMenu(title: g.name)
+                if g.scenarios.isEmpty {
+                    let empty = NSMenuItem(title: NSLocalizedString("(empty)", comment: ""),
+                                           action: nil, keyEquivalent: "")
+                    empty.isEnabled = false
+                    sub.addItem(empty)
+                } else {
+                    for s in g.scenarios {
+                        sub.addItem(makeScenarioItem(s))
+                    }
+                }
+                groupItem.submenu = sub
+                menu.addItem(groupItem)
+            }
         }
 
-        // Resolve which item to select.
-        // - Non-default modes: `nil` → "Use default"; explicit → that value.
-        // - Default mode: show explicit if present, otherwise the legacy
-        //   bare value (visual continuity for unmigrated actions),
-        //   otherwise "Next in list" (`""`).
-        let selection: Any  // String or NSNull
-        if isDefaultMode {
-            let p = action?.nextScenarioPayload
-            if let explicit = p?.targets[modeId] {
-                selection = explicit
-            } else if let legacy = p?.legacyTarget {
-                selection = legacy
-            } else {
-                selection = ""
-            }
-        } else if let explicit = action?.nextScenarioExplicitTarget(forModeId: modeId) {
-            selection = explicit
-        } else {
-            selection = NSNull()
-        }
-
-        let idx = popup.menu?.items.firstIndex(where: { item in
-            if selection is NSNull {
-                return item.representedObject is NSNull
-            }
-            return (item.representedObject as? String) == (selection as? String)
-        }) ?? 0
-        popup.selectItem(at: idx)
+        markSelectedItem(in: menu)
+        let origin = NSPoint(x: 0, y: sender.bounds.height + 4)
+        menu.popUp(positioning: nil, at: origin, in: sender)
     }
 
-    @objc func changed(_ sender: NSPopUpButton) {
-        let rep = sender.selectedItem?.representedObject
-        let newTarget: String?
-        if rep is NSNull {
-            newTarget = nil
-        } else {
-            newTarget = (rep as? String) ?? ""
+    private func makeScenarioItem(_ s: Scenario) -> NSMenuItem {
+        let item = NSMenuItem(title: s.name,
+                              action: #selector(pickScenario(_:)),
+                              keyEquivalent: "")
+        item.target = self
+        item.representedObject = s.id.uuidString
+        return item
+    }
+
+    /// Walk the menu (and submenus) and put a checkmark on whichever entry
+    /// matches the action's current target.
+    private func markSelectedItem(in menu: NSMenu) {
+        let current = resolveCurrentTarget()
+        for item in menu.items {
+            if let sub = item.submenu {
+                for child in sub.items where matches(child, target: current) {
+                    child.state = .on
+                }
+            } else if matches(item, target: current) {
+                item.state = .on
+            }
         }
+    }
+
+    private func matches(_ item: NSMenuItem, target: String?) -> Bool {
+        if target == nil {
+            return item.representedObject is NSNull || item.action == #selector(pickUseDefault(_:))
+        }
+        if let uuid = target, !uuid.isEmpty {
+            return (item.representedObject as? String) == uuid
+        }
+        // Empty string == "Next in list" sentinel.
+        return item.action == #selector(pickNextInList(_:))
+    }
+
+    /// Resolve which target string represents the current selection:
+    /// `nil` → "use default", `""` → "next in list", non-empty → scenario UUID.
+    private func resolveCurrentTarget() -> String? {
+        if isDefaultMode {
+            let p = action?.nextScenarioPayload
+            if let explicit = p?.targets[modeId] { return explicit }
+            if let legacy = p?.legacyTarget { return legacy }
+            return ""
+        }
+        return action?.nextScenarioExplicitTarget(forModeId: modeId)
+    }
+
+    private func labelForTarget(_ target: String?) -> String {
+        guard let target = target else {
+            return NSLocalizedString("Use default", comment: "")
+        }
+        if target.isEmpty {
+            return NSLocalizedString("Next in list", comment: "")
+        }
+        if let s = ScenarioStore.shared.scenarios.first(where: { $0.id.uuidString == target }) {
+            return s.name
+        }
+        // Stale UUID (e.g. the referenced scenario was deleted) — surface
+        // as "Next in list" so the user notices the dangling reference.
+        return NSLocalizedString("Next in list", comment: "")
+    }
+
+    @objc private func pickUseDefault(_ sender: Any?) { applyTarget(nil) }
+    @objc private func pickNextInList(_ sender: Any?) { applyTarget("") }
+    @objc private func pickScenario(_ sender: NSMenuItem) {
+        applyTarget((sender.representedObject as? String) ?? "")
+    }
+
+    private func applyTarget(_ newTarget: String?) {
         action?.setNextScenarioTarget(newTarget,
                                       forModeId: modeId,
                                       defaultModeId: defaultModeId)
+        refreshTitle()
     }
 }
 
