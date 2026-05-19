@@ -303,7 +303,8 @@ final class AutomationRunner {
                     endCondition: endCondition,
                     defaultDelay: baseDelay,
                     scenarios: scenarios,
-                    currentScenarioId: currentScenarioId
+                    currentScenarioId: currentScenarioId,
+                    allowedKinds: action.aiGenAllowedKinds ?? ActionGenService.AllowedKind.defaults
                 )
             } catch {
                 AppLogger.shared.log("⚠️ AI 액션 — 서버 호출 실패: \(error.localizedDescription)")

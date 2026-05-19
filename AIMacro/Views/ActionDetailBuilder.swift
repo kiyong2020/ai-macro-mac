@@ -315,6 +315,9 @@ final class ActionDetailBuilder {
             card.addRow(label: L("Interval"),
                         control: makeAIGenIntervalField(action, disposeBag: disposeBag),
                         hint: "서버 호출 사이 대기 시간 (각 턴마다 화면 캡처 후 액션 실행)")
+            card.addRow(label: L("Allowed Actions"),
+                        control: makeAIGenAllowedKindsField(action, disposeBag: disposeBag),
+                        hint: "AI 가 생성할 수 있는 액션 종류를 제한 (모두 체크 = 제한 없음)")
             card.addRow(label: L("Scan Area"),
                         control: makeOCRAreaPicker(action, disposeBag: disposeBag),
                         hint: "AI 가 분석할 화면 영역을 드래그로 지정")
@@ -1049,7 +1052,96 @@ final class ActionDetailBuilder {
         return row
     }
 
+    /// Grid of checkboxes — one per `AllowedKind` — that lets the user
+    /// restrict which action options the server may emit for this
+    /// `.aiGen` action. No header (`nil`) falls back to
+    /// `AllowedKind.defaults` (currently click-only), matching what the
+    /// runner sends. Toggling any box writes a non-nil subset.
+    ///
+    /// Laid out as three horizontal rows so the row of 10 options fits
+    /// the detail pane: basic kinds, scroll directions, drag directions.
+    private func makeAIGenAllowedKindsField(_ action: AutoAction,
+                                            disposeBag: DisposeBag) -> NSView {
+        let initial: Set<ActionGenService.AllowedKind> =
+            action.aiGenAllowedKinds ?? ActionGenService.AllowedKind.defaults
+
+        // Use a shared mutable Set in a class wrapper so each checkbox
+        // closure can read/write the current selection without recapturing
+        // every other checkbox.
+        final class Selection {
+            var kinds: Set<ActionGenService.AllowedKind>
+            init(_ k: Set<ActionGenService.AllowedKind>) { self.kinds = k }
+        }
+        let selection = Selection(initial)
+
+        // Direction-only checkbox titles for the scroll/drag rows — the
+        // "스크롤"/"드래그" prefix lives on a separate row-leading label.
+        func boxTitle(_ kind: ActionGenService.AllowedKind) -> String {
+            switch kind {
+            case .scrollUp:  return "위"
+            case .scrollDown: return "아래"
+            case .dragUp:    return "위"
+            case .dragDown:  return "아래"
+            case .dragLeft:  return "왼쪽"
+            case .dragRight: return "오른쪽"
+            default:         return kind.displayName
+            }
+        }
+
+        func makeBox(_ kind: ActionGenService.AllowedKind) -> NSButton {
+            let box = NSButton(checkboxWithTitle: boxTitle(kind),
+                               target: nil, action: nil)
+            box.state = initial.contains(kind) ? .on : .off
+            let bridge = CheckboxToggleBridge(checkbox: box) { [weak action] isOn in
+                if isOn {
+                    selection.kinds.insert(kind)
+                } else {
+                    selection.kinds.remove(kind)
+                }
+                action?.setAIGenAllowedKinds(selection.kinds)
+            }
+            box.target = bridge
+            box.action = #selector(CheckboxToggleBridge.toggled)
+            objc_setAssociatedObject(box, &Self.checkboxBridgeAssocKey,
+                                     bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            return box
+        }
+
+        func makeRowLabel(_ title: String) -> NSView {
+            let label = NSTextField(labelWithString: title)
+            label.font = .systemFont(ofSize: 13)
+            label.textColor = .secondaryLabelColor
+            label.translatesAutoresizingMaskIntoConstraints = false
+            // Fixed leading column so the direction checkboxes line up
+            // visually between the scroll and drag rows.
+            label.widthAnchor.constraint(equalToConstant: 48).isActive = true
+            return label
+        }
+
+        func makeRow(_ views: [NSView]) -> NSStackView {
+            let row = NSStackView(views: views)
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 10
+            return row
+        }
+
+        let stack = NSStackView(views: [
+            makeRow([.click, .key, .wait, .flowMove].map(makeBox)),
+            makeRow([makeRowLabel("스크롤"), makeBox(.scrollUp), makeBox(.scrollDown)]),
+            makeRow([makeRowLabel("드래그"),
+                     makeBox(.dragUp), makeBox(.dragDown),
+                     makeBox(.dragLeft), makeBox(.dragRight)]),
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return stack
+    }
+
     private static var textViewBridgeAssocKey: UInt8 = 0
+    private static var checkboxBridgeAssocKey: UInt8 = 0
 
     /// Initialize a `.openBrowser` action's `text` so subsequent UI bindings
     /// have something concrete to render. Pre-fills the URL slot from the
@@ -3059,6 +3151,24 @@ private final class DisabledToggleBridge: NSObject {
 /// Checkbox + delay-field shim for the `.scroll` "느린 간격" option.
 /// Toggling the checkbox also enables/disables the field, since the
 /// delay value is only meaningful while `slow == true`.
+/// Generic `target/action` shim for a single NSButton checkbox. The
+/// closure receives the post-toggle state (`true` for on). Use when the
+/// existing toggle bridges don't fit (e.g. a row of unrelated checkboxes
+/// each driving a different mutation).
+final class CheckboxToggleBridge: NSObject {
+    private weak var checkbox: NSButton?
+    private let handler: (Bool) -> Void
+
+    init(checkbox: NSButton, handler: @escaping (Bool) -> Void) {
+        self.checkbox = checkbox
+        self.handler = handler
+    }
+
+    @objc func toggled() {
+        handler(checkbox?.state == .on)
+    }
+}
+
 private final class ScrollSlowBridge: NSObject {
     private weak var action: AutoAction?
     let checkbox: NSButton

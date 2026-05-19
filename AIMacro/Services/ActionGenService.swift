@@ -53,6 +53,57 @@ final class ActionGenService {
         let name: String
     }
 
+    /// Action kinds the server may emit for one `.aiGen` call. Raw values
+    /// are the wire-format strings the API expects in the `allowed_kinds`
+    /// request field — keep them in lockstep with `GeneratedKind` on the
+    /// server (`ai-macro-api/src/claude/claude.service.ts`).
+    /// Granular action options the user can toggle in the `.aiGen`
+    /// editor. Scroll and drag are split per-direction so the user can,
+    /// for example, allow drag-down only while forbidding drag-up.
+    ///
+    /// Wire values are sent in `allowed_kinds`. The server splits them
+    /// into base kinds (for the `kind` JSON-schema enum), scroll
+    /// directions (constrained via the `direction` enum), and drag
+    /// directions (communicated via the system prompt — drag direction
+    /// is implicit in the waypoints, so it's a prompt-level rule).
+    enum AllowedKind: String, CaseIterable {
+        case click
+        case key
+        case scrollUp    = "scroll:up"
+        case scrollDown  = "scroll:down"
+        case dragUp      = "drag:up"
+        case dragDown    = "drag:down"
+        case dragLeft    = "drag:left"
+        case dragRight   = "drag:right"
+        case wait
+        /// Branch to another flow. Wire value matches the server's
+        /// `nextScenario` kind. Only honoured when the request also
+        /// includes a non-empty `scenarios` list.
+        case flowMove    = "nextScenario"
+
+        /// User-facing Korean label shown in the action editor.
+        var displayName: String {
+            switch self {
+            case .click:      return "클릭"
+            case .key:        return "키 입력"
+            case .scrollUp:   return "스크롤 위"
+            case .scrollDown: return "스크롤 아래"
+            case .dragUp:     return "드래그 위"
+            case .dragDown:   return "드래그 아래"
+            case .dragLeft:   return "드래그 왼쪽"
+            case .dragRight:  return "드래그 오른쪽"
+            case .wait:       return "시간 대기"
+            case .flowMove:   return "플로우 이동"
+            }
+        }
+
+        /// Effective default applied to any `.aiGen` action that hasn't
+        /// been explicitly customised. Intentionally conservative — the
+        /// model is restricted to clicks only until the user opts into
+        /// more powerful kinds.
+        static let defaults: Set<AllowedKind> = [.click]
+    }
+
     /// Send the captured region + instruction to the server. Coordinates
     /// in the response are in the image's local pixel space (top-left
     /// origin); callers translate to screen-space by adding the capture
@@ -67,12 +118,17 @@ final class ActionGenService {
     ///   - scenarios: Flows the AI may branch to. Empty disables branching.
     ///   - currentScenarioId: UUID of the flow `.aiGen` is running inside.
     ///     The AI is told not to branch to itself.
+    ///   - allowedKinds: Restrict the server to emit only these action
+    ///     kinds. `nil` ⇒ no client-side restriction (server uses its
+    ///     defaults). Empty Set ⇒ explicitly forbid every kind (the
+    ///     server will return an empty action list).
     func generate(image: NSImage,
                   instruction: String,
                   endCondition: String = "",
                   defaultDelay: Double,
                   scenarios: [ScenarioInfo] = [],
-                  currentScenarioId: String? = nil) async throws -> GenerateResult {
+                  currentScenarioId: String? = nil,
+                  allowedKinds: Set<AllowedKind>? = nil) async throws -> GenerateResult {
         guard let pngData = pngData(from: image) else {
             throw GenerateError(message: "이미지 인코딩 실패")
         }
@@ -100,6 +156,12 @@ final class ActionGenService {
         }
         if let cur = currentScenarioId, !cur.isEmpty {
             body["current_scenario_id"] = cur
+        }
+        if let allowedKinds = allowedKinds {
+            // Stable order so request bodies are diffable in logs.
+            body["allowed_kinds"] = AllowedKind.allCases
+                .filter { allowedKinds.contains($0) }
+                .map { $0.rawValue }
         }
 
         logRequest(url: url, body: body, base64Size: pngData.count)

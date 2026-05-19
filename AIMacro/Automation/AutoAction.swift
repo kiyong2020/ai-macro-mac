@@ -384,13 +384,16 @@ extension AutoAction {
 /// - an optional inter-iteration interval (seconds) for the multi-turn loop,
 /// - an optional end condition (single-line) — when present, the runner
 ///   keeps calling `/generate-actions` until the model reports the
-///   condition is satisfied; when empty, the runner makes exactly one call.
+///   condition is satisfied; when empty, the runner makes exactly one call,
+/// - an optional `allowedKinds` subset that restricts which action kinds
+///   the server may emit.
 ///
 /// Encoded as zero-or-more `@key=value` header lines at the top followed
 /// by the instruction body:
 /// ```
 /// @interval=2.0
 /// @end=로그인 화면이 보이면 종료
+/// @allowed=click,drag,scroll,nextScenario
 /// 로그인 버튼을 클릭
 /// ```
 /// Headers may appear in any order. Lines that don't match `@key=value`
@@ -405,6 +408,9 @@ struct AIGenPayload {
     var interval: Double?
     /// Empty ⇒ one-shot mode (runner stops after a single API call).
     var endCondition: String = ""
+    /// `nil` ⇒ no `@allowed` header — server uses its default kind set.
+    /// Non-nil (possibly empty) ⇒ user explicitly restricted the kinds.
+    var allowedKinds: Set<ActionGenService.AllowedKind>?
 
     static func parse(_ raw: String) -> AIGenPayload {
         var payload = AIGenPayload()
@@ -424,6 +430,12 @@ struct AIGenPayload {
                 }
             case "end":
                 payload.endCondition = value
+            case "allowed":
+                payload.allowedKinds = Set(
+                    value.split(separator: ",").compactMap {
+                        ActionGenService.AllowedKind(rawValue: String($0).trimmingCharacters(in: .whitespaces))
+                    }
+                )
             default:
                 // Unknown header — stop parsing and treat as body so we
                 // don't silently swallow content the user typed.
@@ -448,6 +460,14 @@ struct AIGenPayload {
         }
         if !endCondition.isEmpty {
             lines.append("@end=\(sanitizeSingleLine(endCondition))")
+        }
+        if let allowedKinds = allowedKinds {
+            // Stable order so re-encoding doesn't churn the file.
+            let values = ActionGenService.AllowedKind.allCases
+                .filter { allowedKinds.contains($0) }
+                .map { $0.rawValue }
+                .joined(separator: ",")
+            lines.append("@allowed=\(values)")
         }
         lines.append(instruction)
         return lines.joined(separator: "\n")
@@ -505,6 +525,19 @@ extension AutoAction {
     func setAIGenEndCondition(_ condition: String) {
         var p = AIGenPayload.parse((try? text.value()) ?? "")
         p.endCondition = condition.trimmingCharacters(in: .whitespacesAndNewlines)
+        text.onNext(p.encode())
+    }
+
+    /// User-restricted action kinds for the server. `nil` ⇒ no restriction
+    /// (server defaults). Non-nil ⇒ subset (possibly empty) explicitly
+    /// chosen in the editor.
+    var aiGenAllowedKinds: Set<ActionGenService.AllowedKind>? {
+        AIGenPayload.parse((try? text.value()) ?? "").allowedKinds
+    }
+
+    func setAIGenAllowedKinds(_ kinds: Set<ActionGenService.AllowedKind>?) {
+        var p = AIGenPayload.parse((try? text.value()) ?? "")
+        p.allowedKinds = kinds
         text.onNext(p.encode())
     }
 }
