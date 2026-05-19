@@ -42,13 +42,12 @@ final class AutomationRunner {
     /// from its keyboard subscription on the Enter key.
     private var waitDone = false
 
-    /// Populated when a `.nextScenario` action runs. The run loop checks
-    /// it after each action and breaks early; the view controller reads
-    /// this property when `run(_:)` returns to decide which scenario to
-    /// move to.
-    ///
-    /// - `.next`           — jump to the next scenario in the list
-    /// - `.specific(id:)`  — jump to the scenario with the given UUID
+    /// Populated when a `.nextScenario` action with a specific target
+    /// runs. The run loop checks it after each action and breaks early;
+    /// the view controller reads this property when `run(_:)` returns to
+    /// decide which scenario to move to. An empty target means "이동
+    /// 안함" — the runner leaves this nil and continues with subsequent
+    /// actions.
     private(set) var nextScenarioRequest: NextScenarioRequest?
 
     /// UUID of the scenario whose actions are currently being executed.
@@ -65,12 +64,11 @@ final class AutomationRunner {
     /// UUID of the FlowMode active for this run. Used by `.nextScenario`
     /// to pick a per-mode target — unset / unknown values fall back to
     /// the default (first) FlowMode's target, then to the legacy value,
-    /// then to "next in list". Set by the view controller before each
-    /// call to `run(_:)`.
+    /// then to "이동 안함". Set by the view controller before each call
+    /// to `run(_:)`.
     var currentFlowModeId: String?
 
     enum NextScenarioRequest {
-        case next
         case specific(id: String)
     }
 
@@ -425,7 +423,9 @@ final class AutomationRunner {
     /// Populates `nextScenarioRequest` so the run loop short-circuits and
     /// the view controller routes the run to the right scenario. The
     /// target is resolved per-FlowMode via `NextScenarioPayload` — empty
-    /// means "next in list", any non-empty value is a scenario UUID.
+    /// means "이동 안함" (no-op: leave `nextScenarioRequest` nil so the
+    /// run loop continues with subsequent actions), any non-empty value
+    /// is a scenario UUID.
     private func runNextScenario(_ action: AutoAction) {
         let defaultModeId = FlowModeStore.shared.flowModes.first?.id.uuidString
         let raw = action
@@ -433,8 +433,7 @@ final class AutomationRunner {
                                 defaultModeId: defaultModeId)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.isEmpty {
-            nextScenarioRequest = .next
-            AppLogger.shared.log("➡️ 다음 플로우로 이동 요청 (목록 순서)")
+            AppLogger.shared.log("⏭ 플로우 이동 없음")
         } else {
             nextScenarioRequest = .specific(id: raw)
             AppLogger.shared.log("➡️ 플로우 전환 요청: \(raw)")

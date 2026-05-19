@@ -492,7 +492,7 @@ final class ActionDetailBuilder {
     }
 
     /// Add one row per FlowMode to the `.nextScenario` card. The default
-    /// (first) mode shows `[Next in list, scenario1, ...]`; non-default
+    /// (first) mode shows `[No Movement, scenario1, ...]`; non-default
     /// modes prepend a `Use default` option that clears the per-mode
     /// override so they fall back to the default mode's target.
     ///
@@ -525,7 +525,7 @@ final class ActionDetailBuilder {
             row.alignment = .firstBaseline
             row.spacing = 10
             let hint = isDefault
-                ? L("Stops the current flow and starts the next one in the list.")
+                ? L("Pick a flow to move to, or leave as 없음 to skip this action.")
                 : nil
             card.addRow(label: mode.name, control: row, hint: hint)
         }
@@ -2832,8 +2832,8 @@ private final class DelayUnitBridge: NSObject {
 /// Menu item `representedObject` encodes the choice:
 /// - `NSNull` → "Use default" (non-default modes only); writes `nil`
 ///   per-mode override so the runner falls back to the default mode.
-/// - `""` (empty string) → "Next in list"; writes empty target for this
-///   mode.
+/// - `""` (empty string) → "No Movement" (이동 안함); writes empty
+///   target for this mode — the runner treats it as a no-op.
 /// - scenario UUID → writes that UUID for this mode.
 private final class NextScenarioPopupBridge: NSObject {
     private weak var action: AutoAction?
@@ -2857,7 +2857,7 @@ private final class NextScenarioPopupBridge: NSObject {
     /// Update the button title from the action's current per-mode target.
     /// - Non-default modes: `nil` override → "Use default"; explicit → its label.
     /// - Default mode: explicit if present, otherwise the legacy bare value
-    ///   (visual continuity for unmigrated actions), otherwise "Next in list".
+    ///   (visual continuity for unmigrated actions), otherwise "No Movement".
     func refreshTitle() {
         let target = resolveCurrentTarget()
         button.title = labelForTarget(target)
@@ -2876,12 +2876,12 @@ private final class NextScenarioPopupBridge: NSObject {
             menu.addItem(useDefault)
         }
 
-        let nextInList = NSMenuItem(
-            title: NSLocalizedString("Next in list", comment: ""),
-            action: #selector(pickNextInList(_:)),
+        let noMovement = NSMenuItem(
+            title: NSLocalizedString("No Movement", comment: ""),
+            action: #selector(pickNoMovement(_:)),
             keyEquivalent: "")
-        nextInList.target = self
-        menu.addItem(nextInList)
+        noMovement.target = self
+        menu.addItem(noMovement)
 
         let store = ScenarioStore.shared
         if !store.tree.isEmpty {
@@ -2945,8 +2945,8 @@ private final class NextScenarioPopupBridge: NSObject {
         if let uuid = target, !uuid.isEmpty {
             return (item.representedObject as? String) == uuid
         }
-        // Empty string == "Next in list" sentinel.
-        return item.action == #selector(pickNextInList(_:))
+        // Empty string == "No Movement" sentinel.
+        return item.action == #selector(pickNoMovement(_:))
     }
 
     /// Resolve which target string represents the current selection:
@@ -2966,18 +2966,18 @@ private final class NextScenarioPopupBridge: NSObject {
             return NSLocalizedString("Use default", comment: "")
         }
         if target.isEmpty {
-            return NSLocalizedString("Next in list", comment: "")
+            return NSLocalizedString("No Movement", comment: "")
         }
         if let s = ScenarioStore.shared.scenarios.first(where: { $0.id.uuidString == target }) {
             return s.name
         }
         // Stale UUID (e.g. the referenced scenario was deleted) — surface
-        // as "Next in list" so the user notices the dangling reference.
-        return NSLocalizedString("Next in list", comment: "")
+        // as "No Movement" so the user notices the dangling reference.
+        return NSLocalizedString("No Movement", comment: "")
     }
 
     @objc private func pickUseDefault(_ sender: Any?) { applyTarget(nil) }
-    @objc private func pickNextInList(_ sender: Any?) { applyTarget("") }
+    @objc private func pickNoMovement(_ sender: Any?) { applyTarget("") }
     @objc private func pickScenario(_ sender: NSMenuItem) {
         applyTarget((sender.representedObject as? String) ?? "")
     }

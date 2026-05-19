@@ -1612,19 +1612,11 @@ class ViewController: NSViewController {
 
     /// Resolve the `.nextScenario` action's target and move the popup /
     /// action list to it. Returns false when the request can't be honoured
-    /// (already at the last scenario for `.next`, or an unknown id for
-    /// `.specific`) so the caller knows to stop running.
+    /// (unknown id) so the caller knows to stop running.
     private func advanceScenario(for request: AutomationRunner.NextScenarioRequest) -> Bool {
         let store = ScenarioStore.shared
         let target: Int
         switch request {
-        case .next:
-            let nextIndex = currentScenarioIndex + 1
-            guard store.scenarios.indices.contains(nextIndex) else {
-                AppLogger.shared.log("➡️ 다음 플로우 없음 — 자동화 종료")
-                return false
-            }
-            target = nextIndex
         case .specific(let id):
             guard let idx = store.scenarios.firstIndex(where: { $0.id.uuidString == id }) else {
                 AppLogger.shared.log("⚠️ 플로우를 찾지 못함 (id=\(id)) — 자동화 종료")

@@ -543,13 +543,13 @@
         }
       }
     },
-    "Next in list" : {
+    "No Movement" : {
       "extractionState" : "manual",
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "다음 플로우 (목록 순서)"
+            "value" : "없음"
           }
         }
       }
@@ -840,13 +840,13 @@
         }
       }
     },
-    "Stops the current flow and starts the next one in the list." : {
+    "Pick a flow to move to, or leave as 없음 to skip this action." : {
       "extractionState" : "manual",
       "localizations" : {
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "현재 플로우를 종료하고 선택한 플로우를 새로 시작합니다."
+            "value" : "이동할 플로우를 선택하거나 ‘없음’으로 두면 아무 동작도 하지 않습니다."
           }
         }
       }
