@@ -70,11 +70,17 @@ class AutoAction {
     /// runner skips it during playback. Persisted alongside the other
     /// user-editable fields.
     let disabled = BehaviorSubject<Bool>(value: false)
+    /// UI-state: which unit the 초/분 popup next to every delay field
+    /// should show when this action is re-selected. The stored `delay`
+    /// value itself is always in seconds — this only affects rendering.
+    /// Shared by the main delay field and all per-FlowMode delay rows.
+    let delayUnitIsMinutes = BehaviorSubject<Bool>(value: false)
 
     init(type:ActionType, group: String = "", name:String = "", point: CGPoint = .zero, delay: Double = 0, count: Int = 1,
          text:String = "",
          clicks: Int = 1,
          disabled: Bool = false,
+         delayUnitIsMinutes: Bool = false,
          runsDisablePopup: Bool = false,
          id: String = UUID().uuidString) {
         self.id = id
@@ -87,6 +93,7 @@ class AutoAction {
         self.text.onNext(text)
         self.clicks.onNext(clicks)
         self.disabled.onNext(disabled)
+        self.delayUnitIsMinutes.onNext(delayUnitIsMinutes)
     }
     
     func set(json: [String: Any]) throws {
@@ -113,6 +120,9 @@ class AutoAction {
         if let disabled = json["disabled"] as? Bool {
             self.disabled.onNext(disabled)
         }
+        if let u = json["delayUnitIsMinutes"] as? Bool {
+            self.delayUnitIsMinutes.onNext(u)
+        }
     }
 
     func toJSON() -> [String: Any] {
@@ -125,6 +135,7 @@ class AutoAction {
             "text": try! text.value(),
             "clicks": try! clicks.value(),
             "disabled": try! disabled.value(),
+            "delayUnitIsMinutes": try! delayUnitIsMinutes.value(),
             ]
     }
     
@@ -223,6 +234,7 @@ extension AutoAction {
             text: (try? text.value()) ?? "",
             clicks: (try? clicks.value()) ?? 1,
             disabled: (try? disabled.value()) ?? false,
+            delayUnitIsMinutes: (try? delayUnitIsMinutes.value()) ?? false,
             runsDisablePopup: runsDisablePopup
         )
         return copy

@@ -986,7 +986,8 @@ class ViewController: NSViewController {
             Observable<Bool>.merge(a.point.map { _ in true },
                                    a.delay.map { _ in true },
                                    a.count.map { _ in true },
-                                   a.text.map  { _ in true })
+                                   a.text.map  { _ in true },
+                                   a.delayUnitIsMinutes.map { _ in true })
                 .throttle(.milliseconds(500), scheduler: MainScheduler.instance)
                 .subscribe { [weak self] _ in
                     a.save()

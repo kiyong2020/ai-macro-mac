@@ -386,7 +386,10 @@ final class ActionDetailBuilder {
     private static var disabledBridgeAssocKey: UInt8 = 0
 
     private func makeDelayField(_ action: AutoAction, disposeBag: DisposeBag) -> NSView {
-        let field = NSTextField(string: String(format: "%g", (try? action.delay.value()) ?? 0))
+        let initialIsMinutes = (try? action.delayUnitIsMinutes.value()) ?? false
+        let initialFactor: Double = initialIsMinutes ? 60.0 : 1.0
+        let initialSecs = (try? action.delay.value()) ?? 0
+        let field = NSTextField(string: String(format: "%g", initialSecs / initialFactor))
         field.bezelStyle = .roundedBezel
         field.translatesAutoresizingMaskIntoConstraints = false
         field.widthAnchor.constraint(equalToConstant: 90).isActive = true
@@ -395,7 +398,7 @@ final class ActionDetailBuilder {
         // seconds — the popup only changes how the field renders/parses.
         // On unit change we rewrite the field with the same stored value
         // expressed in the new unit (e.g. 60s shown as "1" when "분").
-        let unitPopup = makeDelayUnitPopup { [weak action, weak field] factor in
+        let unitPopup = makeDelayUnitPopup(action: action, disposeBag: disposeBag) { [weak action, weak field] factor in
             guard let field = field else { return }
             let secs = (try? action?.delay.value()) ?? 0
             field.stringValue = String(format: "%g", secs / factor)
@@ -415,18 +418,41 @@ final class ActionDetailBuilder {
         return row
     }
 
-    /// `[ "초" | "분" ]` popup used by every delay input. The `onChange`
-    /// closure receives the new factor (1.0 for 초, 60.0 for 분); the
-    /// caller is responsible for re-rendering the associated field.
-    private func makeDelayUnitPopup(onChange: @escaping (Double) -> Void) -> NSPopUpButton {
+    /// `[ "초" | "분" ]` popup used by every delay input.
+    ///
+    /// The popup initialises from (and writes back to) `action.delayUnitIsMinutes`,
+    /// so the unit choice survives action re-selection and stays in sync
+    /// across sibling popups built for the same action (e.g. the per-FlowMode
+    /// rows in the Go to Flow card). `onChange` receives the new factor
+    /// (1.0 for 초, 60.0 for 분) so the caller can re-render its field.
+    private func makeDelayUnitPopup(action: AutoAction,
+                                    disposeBag: DisposeBag,
+                                    onChange: @escaping (Double) -> Void) -> NSPopUpButton {
         let popup = NSPopUpButton(frame: .zero, pullsDown: false)
         popup.addItems(withTitles: ["초", "분"])
         popup.translatesAutoresizingMaskIntoConstraints = false
-        let bridge = DelayUnitBridge(onChange: onChange)
+        let initialIsMinutes = (try? action.delayUnitIsMinutes.value()) ?? false
+        popup.selectItem(at: initialIsMinutes ? 1 : 0)
+        let bridge = DelayUnitBridge(action: action, onChange: onChange)
         popup.target = bridge
         popup.action = #selector(DelayUnitBridge.changed(_:))
         objc_setAssociatedObject(popup, &Self.delayUnitBridgeAssocKey,
                                  bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        // Stay in sync with sibling popups: when a neighbour writes to the
+        // subject we update our own selection and re-render via onChange.
+        // The index check prevents redundant onChange firings for the popup
+        // that originated the change (its bridge already invoked onChange).
+        action.delayUnitIsMinutes
+            .observe(on: MainScheduler.instance)
+            .subscribe(onNext: { [weak popup] isMinutes in
+                guard let popup = popup else { return }
+                let idx = isMinutes ? 1 : 0
+                if popup.indexOfSelectedItem != idx {
+                    popup.selectItem(at: idx)
+                    onChange(isMinutes ? 60.0 : 1.0)
+                }
+            })
+            .disposed(by: disposeBag)
         return popup
     }
 
@@ -590,15 +616,17 @@ final class ActionDetailBuilder {
                                             defaultModeId: String,
                                             isDefaultMode: Bool,
                                             disposeBag: DisposeBag) -> NSView {
+        let initialIsMinutes = (try? action.delayUnitIsMinutes.value()) ?? false
+        let initialFactor: Double = initialIsMinutes ? 60.0 : 1.0
         let field = NSTextField(string: "")
         field.bezelStyle = .roundedBezel
         field.translatesAutoresizingMaskIntoConstraints = false
         field.widthAnchor.constraint(equalToConstant: 70).isActive = true
         if let d = action.nextScenarioExplicitDelay(forModeId: modeId) {
-            field.stringValue = String(format: "%g", d)
+            field.stringValue = String(format: "%g", d / initialFactor)
         }
 
-        let unitPopup = makeDelayUnitPopup { [weak action, weak field] factor in
+        let unitPopup = makeDelayUnitPopup(action: action, disposeBag: disposeBag) { [weak action, weak field] factor in
             guard let field = field else { return }
             // Re-render the explicit value (if any) in the new unit.
             if let d = action?.nextScenarioExplicitDelay(forModeId: modeId) {
@@ -2905,14 +2933,21 @@ private final class AreaSelectionView: NSView {
 }
 
 /// Target/action bridge for the 초/분 unit popup used by delay fields.
-/// Holds the `onChange` closure so the popup can be wired up with the
-/// usual Cocoa `target:action:` pair without forcing the call site to
-/// subclass anything. Kept alive via an associated object on the popup.
+/// On user toggle, writes the new unit to `action.delayUnitIsMinutes`
+/// (so the choice persists and sibling popups can mirror it) and invokes
+/// `onChange` so the associated field re-renders. Kept alive via an
+/// associated object on the popup.
 private final class DelayUnitBridge: NSObject {
+    private weak var action: AutoAction?
     private let onChange: (Double) -> Void
-    init(onChange: @escaping (Double) -> Void) { self.onChange = onChange }
+    init(action: AutoAction, onChange: @escaping (Double) -> Void) {
+        self.action = action
+        self.onChange = onChange
+    }
     @objc func changed(_ sender: NSPopUpButton) {
-        onChange(sender.indexOfSelectedItem == 0 ? 1.0 : 60.0)
+        let isMinutes = sender.indexOfSelectedItem == 1
+        action?.delayUnitIsMinutes.onNext(isMinutes)
+        onChange(isMinutes ? 60.0 : 1.0)
     }
 }
 
