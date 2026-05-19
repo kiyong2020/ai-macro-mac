@@ -1,550 +1,1008 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "(empty)" : {
+
+    },
     "(Not captured yet)" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "(아직 캡처되지 않음)" } }
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "(아직 캡처되지 않음)"
+          }
+        }
       }
     },
     "(Not recorded)" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "(녹화되지 않음)" } }
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "(녹화되지 않음)"
+          }
+        }
       }
     },
     "(Not set)" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "(미설정)" } }
-      }
-    },
-    "Add Action" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "동작 추가" } }
-      }
-    },
-    "Append new action to current flow" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "현재 플로우 끝에 새 동작 추가" } }
-      }
-    },
-    "Auto-start time — sequence runs when this time is reached" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "자동 실행 시작 시각 — 도달 시점에 시퀀스가 자동으로 시작" } }
-      }
-    },
-    "Basic" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "기본" } }
-      }
-    },
-    "Browser" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "브라우저" } }
-      }
-    },
-    "Button" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "버튼" } }
-      }
-    },
-    "Click" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "클릭" } }
-      }
-    },
-    "Click Position" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "클릭 위치" } }
-      }
-    },
-    "Default Mode" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "기본모드" } }
-      }
-    },
-    "Delay" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "지연 시간" } }
-      }
-    },
-    "Direction" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "방향" } }
-      }
-    },
-    "Drag" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "드래그" } }
-      }
-    },
-    "End Condition" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "종료 조건" } }
-      }
-    },
-    "Add flow" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "플로우 추가" } }
-      }
-    },
-    "Height" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "높이" } }
-      }
-    },
-    "Insert Above" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "위에 추가" } }
-      }
-    },
-    "Insert Below" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "아래에 추가" } }
-      }
-    },
-    "Key" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "키 입력" } }
-      }
-    },
-    "Location" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "위치" } }
-      }
-    },
-    "Action default delay (sec):" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "액션 기본 딜레이(초):" } }
-      }
-    },
-    "Max random delay (sec):" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "랜덤 딜레이 최대(초):" } }
-      }
-    },
-    "Modifiers" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "수정자" } }
-      }
-    },
-    "My Flow" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "나의 플로우" } }
-      }
-    },
-    "Name" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "이름" } }
-      }
-    },
-    "Go to Flow" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "플로우 이동" } }
-      }
-    },
-    "Behavior" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "동작" } }
-      }
-    },
-    "Target" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "대상 플로우" } }
-      }
-    },
-    "Next in list" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "다음 플로우 (목록 순서)" } }
-      }
-    },
-    "Stops the current flow and starts the next one in the list." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "현재 플로우를 종료하고 선택한 플로우를 새로 시작합니다." } }
-      }
-    },
-    "➡️  Go to Flow" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "➡️  플로우 이동" } }
-      }
-    },
-    "New Chrome Window" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "새 Chrome 창" } }
-      }
-    },
-    "OCR Click" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "글자인식 클릭" } }
-      }
-    },
-    "OCR Search" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "OCR 검색" } }
-      }
-    },
-    "Opens in default browser (Chrome / Safari / Edge etc.)" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "디폴트 브라우저로 열림 (Chrome / Safari / Edge 등)" } }
-      }
-    },
-    "Options" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "옵션" } }
-      }
-    },
-    "Slow interval" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "느린 간격" } }
-      }
-    },
-    "Spaces wheel ticks further apart so apps like Android Emulator don't add momentum scrolling." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "휠 틱 사이의 간격을 늘려서 Android Emulator 같은 앱이 관성 스크롤을 추가하지 않게 합니다." } }
-      }
-    },
-    "Path" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "경로" } }
-      }
-    },
-    "Position" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "좌표" } }
-      }
-    },
-    "Preview" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "미리보기" } }
-      }
-    },
-    "Ready" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "준비" } }
-      }
-    },
-    "Record" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "녹화" } }
-      }
-    },
-    "Rename / delete flow" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "플로우 이름 변경 / 삭제" } }
-      }
-    },
-    "Repeat" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "반복" } }
-      }
-    },
-    "Request" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "권한 요청" } }
-      }
-    },
-    "Request Accessibility / Screen Recording / Apple Events at once." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "손쉬운 사용 / 화면 기록 / Apple Events 권한을 한 번에 요청합니다." } }
-      }
-    },
-    "Run Script" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "스크립트 실행" } }
-      }
-    },
-    "Saved Frame" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "저장된 프레임" } }
-      }
-    },
-    "Scan Area" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "스캔 영역" } }
-      }
-    },
-    "Script" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "스크립트" } }
-      }
-    },
-    "Scroll" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "스크롤" } }
-      }
-    },
-    "Search Text" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "찾을 텍스트" } }
-      }
-    },
-    "Select an action from the left" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "왼쪽에서 액션을 선택하세요" } }
-      }
-    },
-    "Settings" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "설정" } }
-      }
-    },
-    "Show / hide log" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "로그 영역 열기 / 닫기" } }
-      }
-    },
-    "Simulates mouse wheel / Magic Mouse swipe" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "마우스 휠 / 매직 마우스 스위프 시뮬레이션" } }
-      }
-    },
-    "Start / Stop" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "실행 시작 / 중지" } }
-      }
-    },
-    "System permissions:" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "시스템 권한:" } }
-      }
-    },
-    "Target Position" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "타겟 좌표" } }
-      }
-    },
-    "Text Argument" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "텍스트 인자" } }
-      }
-    },
-    "Type" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "타입" } }
-      }
-    },
-    "URL" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "URL" } }
-      }
-    },
-    "Use default" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "기본 모드 따름" } }
-      }
-    },
-    "URL Settings" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "URL 설정" } }
-      }
-    },
-    "Wait" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "대기" } }
-      }
-    },
-    "Wait Click" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "클릭 대기" } }
-      }
-    },
-    "Wait Enter" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "엔터 대기" } }
-      }
-    },
-    "Wait Time" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "시간 대기" } }
-      }
-    },
-    "Width" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "너비" } }
-      }
-    },
-    "Window Frame" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "창 프레임" } }
-      }
-    },
-    "✓ Done" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "✓ 완료" } }
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "(미설정)"
+          }
+        }
       }
     },
     "＋ Add Action" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "＋ 동작 추가" } }
-      }
-    },
-    "📍 Pick Location" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "📍 위치 선택" } }
-      }
-    },
-    "📍 Pick Position" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "📍 위치 지정" } }
-      }
-    },
-    "📍 Pick Window" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "📍 윈도우 선택" } }
-      }
-    },
-    "🎯 Record Drag" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "🎯 드래그 녹화" } }
-      }
-    },
-    "🎯 Record Scroll" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "🎯 스크롤 녹화" } }
-      }
-    },
-    "🔲 Drag to Select Area" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "🔲 드래그로 영역 지정" } }
-      }
-    },
-    "🪟 Restore" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "🪟 복원" } }
-      }
-    },
-    "🖱  Click" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "🖱  클릭" } }
-      }
-    },
-    "⬇  Scroll" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "⬇  스크롤" } }
-      }
-    },
-    "✋  Drag" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "✋  드래그" } }
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "＋ 동작 추가"
+          }
+        }
       }
     },
     "⌨︎  Key" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "⌨︎  키 입력" } }
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⌨︎  키 입력"
+          }
+        }
       }
     },
     "⏱  Wait" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "⏱  대기" } }
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⏱  대기"
+          }
+        }
       }
     },
-    "🔍  OCR" : {
+    "✋  Drag" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "🔍  OCR" } }
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "✋  드래그"
+          }
+        }
       }
     },
-    "📝  Script" : {
+    "✓ Done" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "📝  스크립트" } }
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "✓ 완료"
+          }
+        }
+      }
+    },
+    "➡️  Go to Flow" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "➡️  플로우 이동"
+          }
+        }
+      }
+    },
+    "⬇  Scroll" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⬇  스크롤"
+          }
+        }
       }
     },
     "🌐🪟  Browser" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "🌐🪟  브라우저" } }
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "🌐🪟  브라우저"
+          }
+        }
+      }
+    },
+    "🎯 Record Drag" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "🎯 드래그 녹화"
+          }
+        }
+      }
+    },
+    "🎯 Record Scroll" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "🎯 스크롤 녹화"
+          }
+        }
+      }
+    },
+    "📍 Pick Location" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "📍 위치 선택"
+          }
+        }
+      }
+    },
+    "📍 Pick Position" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "📍 위치 지정"
+          }
+        }
+      }
+    },
+    "📍 Pick Window" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "📍 윈도우 선택"
+          }
+        }
+      }
+    },
+    "📝  Script" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "📝  스크립트"
+          }
+        }
+      }
+    },
+    "🔍  OCR" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "🔍  OCR"
+          }
+        }
+      }
+    },
+    "🔲 Drag to Select Area" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "🔲 드래그로 영역 지정"
+          }
+        }
+      }
+    },
+    "🖱  Click" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "🖱  클릭"
+          }
+        }
       }
     },
     "🪟  Window Frame" : {
       "extractionState" : "manual",
       "localizations" : {
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "🪟  창프레임" } }
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "🪟  창프레임"
+          }
+        }
+      }
+    },
+    "🪟 Restore" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "🪟 복원"
+          }
+        }
+      }
+    },
+    "Action default delay (sec):" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "액션 기본 딜레이(초):"
+          }
+        }
+      }
+    },
+    "Add Action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동작 추가"
+          }
+        }
+      }
+    },
+    "Add flow" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "플로우 추가"
+          }
+        }
+      }
+    },
+    "Append new action to current flow" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "현재 플로우 끝에 새 동작 추가"
+          }
+        }
+      }
+    },
+    "Auto-start time — sequence runs when this time is reached" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "자동 실행 시작 시각 — 도달 시점에 시퀀스가 자동으로 시작"
+          }
+        }
+      }
+    },
+    "Basic" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기본"
+          }
+        }
+      }
+    },
+    "Behavior" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동작"
+          }
+        }
+      }
+    },
+    "Browser" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "브라우저"
+          }
+        }
+      }
+    },
+    "Button" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "버튼"
+          }
+        }
+      }
+    },
+    "Click" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "클릭"
+          }
+        }
+      }
+    },
+    "Click Position" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "클릭 위치"
+          }
+        }
+      }
+    },
+    "Default Mode" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기본모드"
+          }
+        }
+      }
+    },
+    "Delay" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지연 시간"
+          }
+        }
+      }
+    },
+    "Direction" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "방향"
+          }
+        }
+      }
+    },
+    "Drag" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "드래그"
+          }
+        }
+      }
+    },
+    "End Condition" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "종료 조건"
+          }
+        }
+      }
+    },
+    "Go to Flow" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "플로우 이동"
+          }
+        }
+      }
+    },
+    "Height" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "높이"
+          }
+        }
+      }
+    },
+    "Insert Above" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "위에 추가"
+          }
+        }
+      }
+    },
+    "Insert Below" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "아래에 추가"
+          }
+        }
+      }
+    },
+    "Key" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "키 입력"
+          }
+        }
+      }
+    },
+    "Location" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "위치"
+          }
+        }
+      }
+    },
+    "Max random delay (sec):" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "랜덤 딜레이 최대(초):"
+          }
+        }
+      }
+    },
+    "Modifiers" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수정자"
+          }
+        }
+      }
+    },
+    "My Flow" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "나의 플로우"
+          }
+        }
+      }
+    },
+    "Name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이름"
+          }
+        }
+      }
+    },
+    "New Chrome Window" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 Chrome 창"
+          }
+        }
+      }
+    },
+    "Next in list" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다음 플로우 (목록 순서)"
+          }
+        }
+      }
+    },
+    "OCR Click" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "글자인식 클릭"
+          }
+        }
+      }
+    },
+    "OCR Search" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OCR 검색"
+          }
+        }
+      }
+    },
+    "Opens in default browser (Chrome / Safari / Edge etc.)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "디폴트 브라우저로 열림 (Chrome / Safari / Edge 등)"
+          }
+        }
+      }
+    },
+    "Options" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "옵션"
+          }
+        }
+      }
+    },
+    "Path" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "경로"
+          }
+        }
+      }
+    },
+    "Position" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "좌표"
+          }
+        }
+      }
+    },
+    "Preview" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "미리보기"
+          }
+        }
+      }
+    },
+    "Ready" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "준비"
+          }
+        }
+      }
+    },
+    "Record" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "녹화"
+          }
+        }
+      }
+    },
+    "Rename / delete flow" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "플로우 이름 변경 / 삭제"
+          }
+        }
+      }
+    },
+    "Repeat" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "반복"
+          }
+        }
+      }
+    },
+    "Request" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "권한 요청"
+          }
+        }
+      }
+    },
+    "Request Accessibility / Screen Recording / Apple Events at once." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "손쉬운 사용 / 화면 기록 / Apple Events 권한을 한 번에 요청합니다."
+          }
+        }
+      }
+    },
+    "Run Script" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스크립트 실행"
+          }
+        }
+      }
+    },
+    "Saved Frame" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 프레임"
+          }
+        }
+      }
+    },
+    "Scan Area" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스캔 영역"
+          }
+        }
+      }
+    },
+    "Script" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스크립트"
+          }
+        }
+      }
+    },
+    "Scroll" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스크롤"
+          }
+        }
+      }
+    },
+    "Search Text" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "찾을 텍스트"
+          }
+        }
+      }
+    },
+    "Select an action from the left" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "왼쪽에서 액션을 선택하세요"
+          }
+        }
+      }
+    },
+    "Settings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "설정"
+          }
+        }
+      }
+    },
+    "Show / hide log" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로그 영역 열기 / 닫기"
+          }
+        }
+      }
+    },
+    "Simulates mouse wheel / Magic Mouse swipe" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마우스 휠 / 매직 마우스 스위프 시뮬레이션"
+          }
+        }
+      }
+    },
+    "Slow interval" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "느린 간격"
+          }
+        }
+      }
+    },
+    "Spaces wheel ticks further apart so apps like Android Emulator don't add momentum scrolling." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "휠 틱 사이의 간격을 늘려서 Android Emulator 같은 앱이 관성 스크롤을 추가하지 않게 합니다."
+          }
+        }
+      }
+    },
+    "Start / Stop" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실행 시작 / 중지"
+          }
+        }
+      }
+    },
+    "Stops the current flow and starts the next one in the list." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "현재 플로우를 종료하고 선택한 플로우를 새로 시작합니다."
+          }
+        }
+      }
+    },
+    "System permissions:" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "시스템 권한:"
+          }
+        }
+      }
+    },
+    "Target" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "대상 플로우"
+          }
+        }
+      }
+    },
+    "Target Position" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "타겟 좌표"
+          }
+        }
+      }
+    },
+    "Text Argument" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "텍스트 인자"
+          }
+        }
+      }
+    },
+    "Type" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "타입"
+          }
+        }
+      }
+    },
+    "URL" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL"
+          }
+        }
+      }
+    },
+    "URL Settings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL 설정"
+          }
+        }
+      }
+    },
+    "Use default" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기본 모드 따름"
+          }
+        }
+      }
+    },
+    "Wait" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "대기"
+          }
+        }
+      }
+    },
+    "Wait Click" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "클릭 대기"
+          }
+        }
+      }
+    },
+    "Wait Enter" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "엔터 대기"
+          }
+        }
+      }
+    },
+    "Wait Time" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "시간 대기"
+          }
+        }
+      }
+    },
+    "Width" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "너비"
+          }
+        }
+      }
+    },
+    "Window Frame" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "창 프레임"
+          }
+        }
       }
     }
   },
