@@ -278,6 +278,13 @@ final class AutomationRunner {
             AppLogger.shared.log("🤖 AI 액션 시작 (지시문: \(instruction.prefix(40))…, 간격: \(String(format: "%g", action.aiGenInterval))s, 종료조건: \(endCondition.prefix(40)))")
         }
 
+        // Replayed to the server on each iteration so Claude sees its own
+        // prior decisions as conversation memory (better trajectory
+        // consistency, less per-turn oscillation). Capped to the most
+        // recent few turns — the server also caps at 8.
+        var conversationHistory: [[String: Any]] = []
+        let historyWindow = 4
+
         for iteration in 1 ... maxIterations {
             // Capture a fresh screenshot for each turn — the whole point
             // of the loop is that the model sees the result of the prior
@@ -304,11 +311,22 @@ final class AutomationRunner {
                     defaultDelay: baseDelay,
                     scenarios: scenarios,
                     currentScenarioId: currentScenarioId,
-                    allowedKinds: action.aiGenAllowedKinds ?? ActionGenService.AllowedKind.defaults
+                    allowedKinds: action.aiGenAllowedKinds ?? ActionGenService.AllowedKind.defaults,
+                    conversationHistory: conversationHistory
                 )
             } catch {
                 AppLogger.shared.log("⚠️ AI 액션 — 서버 호출 실패: \(error.localizedDescription)")
                 throw error
+            }
+
+            // Append this turn's raw model output for the next call's
+            // history; trim to the sliding window so older turns are
+            // dropped once we exceed it.
+            if let tui = result.toolUseInput {
+                conversationHistory.append(tui)
+                if conversationHistory.count > historyWindow {
+                    conversationHistory.removeFirst(conversationHistory.count - historyWindow)
+                }
             }
 
             try await executeGeneratedBatch(result.actions, captureRect: captureRect, cg: cg)

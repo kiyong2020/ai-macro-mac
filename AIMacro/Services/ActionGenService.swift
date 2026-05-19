@@ -36,9 +36,16 @@ final class ActionGenService {
     /// signal of whether the user goal has been fully achieved. The runner
     /// keeps calling `/generate-actions` (with a fresh screenshot each
     /// turn) until `finish` is true.
+    ///
+    /// `toolUseInput` is the raw `generate_actions` payload the model
+    /// emitted this turn. Opaque from the client's perspective — the
+    /// runner stores it and replays it as `conversation_history` on the
+    /// next call so Claude sees its own prior decisions. `nil` when the
+    /// server didn't include it (older API revision or empty plan).
     struct GenerateResult {
         let actions: [GeneratedActionJSON]
         let finish: Bool
+        let toolUseInput: [String: Any]?
     }
 
     struct GenerateError: LocalizedError {
@@ -122,13 +129,21 @@ final class ActionGenService {
     ///     kinds. `nil` ⇒ no client-side restriction (server uses its
     ///     defaults). Empty Set ⇒ explicitly forbid every kind (the
     ///     server will return an empty action list).
+    ///   - conversationHistory: Prior turns of the same `.aiGen` loop,
+    ///     oldest first. Each entry is the `toolUseInput` from a previous
+    ///     `generate(...)` response. The server replays them as Claude
+    ///     conversation history so the model sees its own past
+    ///     decisions. Pass an empty array on the first iteration. Server
+    ///     caps history at 8 entries — callers should pre-trim to ~3–5
+    ///     to keep request payloads small.
     func generate(image: NSImage,
                   instruction: String,
                   endCondition: String = "",
                   defaultDelay: Double,
                   scenarios: [ScenarioInfo] = [],
                   currentScenarioId: String? = nil,
-                  allowedKinds: Set<AllowedKind>? = nil) async throws -> GenerateResult {
+                  allowedKinds: Set<AllowedKind>? = nil,
+                  conversationHistory: [[String: Any]] = []) async throws -> GenerateResult {
         guard let pngData = pngData(from: image) else {
             throw GenerateError(message: "이미지 인코딩 실패")
         }
@@ -162,6 +177,9 @@ final class ActionGenService {
             body["allowed_kinds"] = AllowedKind.allCases
                 .filter { allowedKinds.contains($0) }
                 .map { $0.rawValue }
+        }
+        if !conversationHistory.isEmpty {
+            body["conversation_history"] = conversationHistory.map { ["tool_use_input": $0] }
         }
 
         logRequest(url: url, body: body, base64Size: pngData.count)
@@ -206,13 +224,14 @@ final class ActionGenService {
             throw GenerateError(message: "응답에 actions 필드 없음")
         }
         let finish = (response["finish"] as? Bool) ?? false
+        let toolUseInput = response["tool_use_input"] as? [String: Any]
         if let conf = response["confidence"] as? Double {
             AppLogger.shared.log("🤖 액션 생성 \(rawActions.count)개 (confidence=\(String(format: "%.2f", conf))\(finish ? ", finish" : ""))")
         }
         if let reason = response["reasoning"] as? String, !reason.isEmpty {
             AppLogger.shared.log("🤖 \(reason)")
         }
-        return GenerateResult(actions: rawActions, finish: finish)
+        return GenerateResult(actions: rawActions, finish: finish, toolUseInput: toolUseInput)
     }
 
     // MARK: - Verbose request/response logging
