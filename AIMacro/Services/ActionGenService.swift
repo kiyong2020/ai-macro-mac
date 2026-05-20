@@ -182,19 +182,31 @@ final class ActionGenService {
             body["conversation_history"] = conversationHistory.map { ["tool_use_input": $0] }
         }
 
-        logRequest(url: url, body: body, base64Size: pngData.count)
+        let reqId = String(UUID().uuidString.prefix(8))
+        let headers: HTTPHeaders = ["Content-Type": "application/json"]
+        logRequest(reqId: reqId,
+                   url: url,
+                   headers: headers,
+                   body: body,
+                   base64Size: pngData.count,
+                   historyCount: conversationHistory.count)
+        let startedAt = Date()
 
         let response = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[String: Any], Error>) in
             session.request(url,
                             method: .post,
                             parameters: body,
                             encoding: JSONEncoding.default,
-                            headers: ["Content-Type": "application/json"])
+                            headers: headers)
                 .validate()
                 .responseData { [weak self] resp in
+                    let elapsed = Date().timeIntervalSince(startedAt)
                     switch resp.result {
                     case .success(let data):
-                        self?.logResponseRaw(data: data, statusCode: resp.response?.statusCode)
+                        self?.logResponseRaw(reqId: reqId,
+                                             data: data,
+                                             response: resp.response,
+                                             elapsed: elapsed)
                         do {
                             let json = try JSONSerialization.jsonObject(with: data)
                             guard let dict = json as? [String: Any] else {
@@ -206,9 +218,11 @@ final class ActionGenService {
                             cont.resume(throwing: error)
                         }
                     case .failure(let err):
-                        self?.logResponseFailure(error: err,
+                        self?.logResponseFailure(reqId: reqId,
+                                                 error: err,
                                                  data: resp.data,
-                                                 statusCode: resp.response?.statusCode)
+                                                 response: resp.response,
+                                                 elapsed: elapsed)
                         let detail: String
                         if let data = resp.data, let s = String(data: data, encoding: .utf8), !s.isEmpty {
                             detail = "\(err.localizedDescription) — \(s)"
@@ -243,31 +257,106 @@ final class ActionGenService {
     // UI. The base64 image is redacted to its byte size — keeping it in
     // the log would push ~1–4 MB of text per call.
 
-    private func logRequest(url: String, body: [String: Any], base64Size: Int) {
+    private static let timestampFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private func logRequest(reqId: String,
+                            url: String,
+                            headers: HTTPHeaders,
+                            body: [String: Any],
+                            base64Size: Int,
+                            historyCount: Int) {
         var redacted = body
         redacted["image"] = "<png \(base64Size) bytes (base64)>"
         let pretty = prettyJSON(redacted) ?? String(describing: redacted)
-        print("[ActionGen] → POST \(url)\n\(pretty)")
+        let ts = Self.timestampFormatter.string(from: Date())
+        let allowed = (body["allowed_kinds"] as? [String])?.joined(separator: ",") ?? "<server default>"
+        let summary = "instruction=\(quotedSummary(body["instruction"] as? String)) "
+            + "end_condition=\(quotedSummary(body["end_condition"] as? String)) "
+            + "default_delay=\(body["default_delay"] ?? "?") "
+            + "image_wh=\(body["image_wh"] ?? "?") "
+            + "image_bytes=\(base64Size) "
+            + "history=\(historyCount) "
+            + "allowed_kinds=[\(allowed)]"
+        let headerLines = headers.map { "  \($0.name): \($0.value)" }.joined(separator: "\n")
+        print("""
+        [ActionGen][\(reqId)] ⇢ \(ts) POST \(url)
+        [ActionGen][\(reqId)] summary: \(summary)
+        [ActionGen][\(reqId)] headers:
+        \(headerLines)
+        [ActionGen][\(reqId)] body:
+        \(pretty)
+        """)
     }
 
-    private func logResponseRaw(data: Data, statusCode: Int?) {
-        let status = statusCode.map { String($0) } ?? "?"
+    private func logResponseRaw(reqId: String,
+                                data: Data,
+                                response: HTTPURLResponse?,
+                                elapsed: TimeInterval) {
+        let status = response.map { String($0.statusCode) } ?? "?"
+        let ts = Self.timestampFormatter.string(from: Date())
+        let dur = String(format: "%.3fs", elapsed)
+        let headerLines = formatResponseHeaders(response)
         if let s = String(data: data, encoding: .utf8) {
             let pretty = (try? JSONSerialization.jsonObject(with: data))
                 .flatMap { prettyJSON($0) } ?? s
-            print("[ActionGen] ← \(status) (\(data.count) bytes)\n\(pretty)")
+            print("""
+            [ActionGen][\(reqId)] ⇠ \(ts) \(status) (\(data.count) bytes, \(dur))
+            [ActionGen][\(reqId)] response headers:
+            \(headerLines)
+            [ActionGen][\(reqId)] response body:
+            \(pretty)
+            """)
         } else {
-            print("[ActionGen] ← \(status) (\(data.count) bytes, non-UTF8)")
+            print("""
+            [ActionGen][\(reqId)] ⇠ \(ts) \(status) (\(data.count) bytes non-UTF8, \(dur))
+            [ActionGen][\(reqId)] response headers:
+            \(headerLines)
+            """)
         }
     }
 
-    private func logResponseFailure(error: Error, data: Data?, statusCode: Int?) {
-        let status = statusCode.map { String($0) } ?? "?"
-        var msg = "[ActionGen] ← FAILED status=\(status) error=\(error.localizedDescription)"
+    private func logResponseFailure(reqId: String,
+                                    error: Error,
+                                    data: Data?,
+                                    response: HTTPURLResponse?,
+                                    elapsed: TimeInterval) {
+        let status = response.map { String($0.statusCode) } ?? "?"
+        let ts = Self.timestampFormatter.string(from: Date())
+        let dur = String(format: "%.3fs", elapsed)
+        let headerLines = formatResponseHeaders(response)
+        var msg = """
+        [ActionGen][\(reqId)] ⇠ \(ts) FAILED status=\(status) (\(dur)) error=\(error.localizedDescription)
+        [ActionGen][\(reqId)] response headers:
+        \(headerLines)
+        """
         if let data = data, let s = String(data: data, encoding: .utf8), !s.isEmpty {
-            msg += "\n\(s)"
+            let pretty = (try? JSONSerialization.jsonObject(with: data))
+                .flatMap { prettyJSON($0) } ?? s
+            msg += "\n[ActionGen][\(reqId)] response body:\n\(pretty)"
         }
         print(msg)
+    }
+
+    private func formatResponseHeaders(_ response: HTTPURLResponse?) -> String {
+        guard let response = response else { return "  <no response>" }
+        let lines = response.allHeaderFields
+            .compactMap { key, value -> String? in
+                guard let k = key as? String else { return nil }
+                return "  \(k): \(value)"
+            }
+            .sorted()
+        return lines.isEmpty ? "  <empty>" : lines.joined(separator: "\n")
+    }
+
+    private func quotedSummary(_ s: String?, max: Int = 80) -> String {
+        guard let s = s, !s.isEmpty else { return "\"\"" }
+        let collapsed = s.replacingOccurrences(of: "\n", with: " ")
+        if collapsed.count <= max { return "\"\(collapsed)\"" }
+        return "\"\(collapsed.prefix(max))…\""
     }
 
     private func prettyJSON(_ value: Any) -> String? {
