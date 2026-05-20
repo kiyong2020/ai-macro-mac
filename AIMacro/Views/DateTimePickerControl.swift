@@ -24,9 +24,21 @@ final class DateTimePickerControl: NSButton {
         didSet { updateTitle() }
     }
 
+    /// When true, the button title shows L("Start now") instead of the
+    /// formatted date whenever `dateValue` is at or before the current time.
+    /// Used by the toolbar Start-time picker; off by default so wait-time
+    /// pickers keep showing the literal target date.
+    var showsPastAsNow: Bool = false {
+        didSet {
+            updateTitle()
+            if showsPastAsNow { startNowTickTimer() } else { stopNowTickTimer() }
+        }
+    }
+
     private var popover: NSPopover?
     private weak var calendarPicker: NSDatePicker?
     private weak var timeTextPicker: NSDatePicker?
+    private var nowTickTimer: Timer?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -64,9 +76,29 @@ final class DateTimePickerControl: NSButton {
     }()
 
     private func updateTitle() {
+        if showsPastAsNow && dateValue <= Date() {
+            title = L("Start now")
+            return
+        }
         let f = includesSeconds ? Self.displayFormatterWithSeconds : Self.displayFormatter
         title = f.string(from: dateValue)
     }
+
+    private func startNowTickTimer() {
+        guard nowTickTimer == nil else { return }
+        // Re-evaluate every 15s so the title flips to "Start now" once the
+        // chosen time passes, without the user having to click anything.
+        nowTickTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
+            self?.updateTitle()
+        }
+    }
+
+    private func stopNowTickTimer() {
+        nowTickTimer?.invalidate()
+        nowTickTimer = nil
+    }
+
+    deinit { nowTickTimer?.invalidate() }
 
     @objc private func showPopover() {
         let timeElements: NSDatePicker.ElementFlags = includesSeconds

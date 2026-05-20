@@ -130,6 +130,7 @@ class ViewController: NSViewController {
         setupStatusAndLogView()
 
         datePicker.dateValue = Date()
+        datePicker.showsPastAsNow = true
         datePicker.toolTip = L("Auto-start time — sequence runs when this time is reached")
         startButton.toolTip = L("Start / Stop")
         tableView.dataSource = self

@@ -142,7 +142,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Snapshot the run state once. The menu is transient — closing
         // and reopening picks up any changes since.
-        let activeId: String? = try? RunCoordinator.shared.activeScenarioId.value()
+        let activeOwner = RunCoordinator.shared.activeOwner()
         let pending = RunCoordinator.shared.pendingTokens()
 
         let runners = WindowRegistry.shared.windows
@@ -155,7 +155,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             for wc in runners {
                 menu.addItem(makeRunnerMenuItem(for: wc,
-                                                activeScenarioId: activeId,
+                                                activeOwner: activeOwner,
                                                 pending: pending))
             }
         }
@@ -177,7 +177,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func makeRunnerMenuItem(for wc: MainWindowController,
-                                    activeScenarioId: String?,
+                                    activeOwner: AnyObject?,
                                     pending: [RunCoordinator.Token]) -> NSMenuItem {
         let vc = wc.contentViewController as? ViewController
         let scenarioId = vc?.currentScenarioIdString()
@@ -187,10 +187,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 .first(where: { $0.id.uuidString == sid })?.name ?? "(알 수 없음)"
         }()
 
-        // Queue tokens are owned by the ViewController, not the WindowController.
+        // Match by owner identity — multiple Runners can share the same
+        // scenario, so the scenario ID alone can't distinguish which one
+        // is actually running.
         let queueIdx = pending.firstIndex { $0.owner === (vc as AnyObject?) }
-        let isRunning = scenarioId != nil && scenarioId == activeScenarioId
-            && queueIdx == nil  // running means active, not pending
+        let isRunning = activeOwner != nil && activeOwner === (vc as AnyObject?)
 
         let icon: String
         let suffix: String

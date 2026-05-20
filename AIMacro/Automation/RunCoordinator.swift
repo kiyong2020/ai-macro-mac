@@ -127,6 +127,14 @@ final class RunCoordinator {
         return queue
     }
 
+    /// Owner of the currently-active token, if any. Used by the status-bar
+    /// menu to mark the right Runner as 실행 중 when multiple windows share
+    /// the same scenario.
+    func activeOwner() -> AnyObject? {
+        lock.lock(); defer { lock.unlock() }
+        return active?.owner
+    }
+
     /// Returns the position (1-based) of `token` in the pending queue,
     /// or nil if it's active or no longer present.
     func queuePosition(of token: Token) -> Int? {

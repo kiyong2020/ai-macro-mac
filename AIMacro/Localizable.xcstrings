@@ -840,6 +840,17 @@
         }
       }
     },
+    "Start now" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금 시작"
+          }
+        }
+      }
+    },
     "Pick a flow to move to, or leave as 없음 to skip this action." : {
       "extractionState" : "manual",
       "localizations" : {
