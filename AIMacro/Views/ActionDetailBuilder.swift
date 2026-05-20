@@ -19,6 +19,11 @@ final class ActionDetailBuilder {
     /// Called when the disable checkbox is toggled on the detail pane so
     /// the list cell can repaint its greyed-out state immediately.
     var onActionDisabledToggled: (() -> Void)?
+    /// Called when a mode dropdown inside the detail pane mutates the
+    /// action's underlying ActionType (e.g. the 글자인식 클릭/플로우
+    /// 이동 toggle). The pane needs a full rebuild so the type-specific
+    /// rows below the dropdown reflect the new mode.
+    var onActionTypeChanged: (() -> Void)?
 
     init(mouseListener: MouseListener) {
         self.mouseListener = mouseListener
@@ -228,13 +233,16 @@ final class ActionDetailBuilder {
             cards.append(makeWaitCard(action, disposeBag: disposeBag))
 
         case .ocr:
-            let card = makeCard(title: L("OCR Search"))
+            let card = makeCard(title: L("Text Recognition"))
+            card.addRow(label: L("Mode"),
+                        control: makeOCRModePopup(action, disposeBag: disposeBag),
+                        hint: "'클릭' = 인식 위치 클릭 · '플로우 이동' = 매칭되면 지정한 플로우로 이동")
             card.addRow(label: L("Search Text"),
                         control: makeTextField(action, disposeBag: disposeBag, placeholder: "구매"),
                         hint: "캡처 영역에서 이 텍스트를 인식하면 클릭")
             card.addRow(label: L("Scan Area"),
                         control: makeOCRAreaPicker(action, disposeBag: disposeBag),
-                        hint: "화면에서 직접 드래그하여 OCR 영역의 위치와 크기를 한 번에 지정")
+                        hint: L("Drag on screen to set the text recognition area position and size at once"))
             card.addRow(label: L("Repeat"),
                         control: makeClicksField(action, disposeBag: disposeBag, suffix: "회"),
                         hint: "찾은 위치를 몇 번 클릭할지")
@@ -300,6 +308,26 @@ final class ActionDetailBuilder {
         case .nextScenario:
             let card = makeCard(title: L("Go to Flow"))
             addNextScenarioRows(to: card, action: action, disposeBag: disposeBag)
+            cards.append(card)
+
+        case .ocrSwitch:
+            let card = makeCard(title: L("Text Recognition"))
+            card.addRow(label: L("Mode"),
+                        control: makeOCRModePopup(action, disposeBag: disposeBag),
+                        hint: "'클릭' = 인식 위치 클릭 · '플로우 이동' = 매칭되면 지정한 플로우로 이동")
+            card.addRow(label: L("Scan Area"),
+                        control: makeOCRAreaPicker(action, disposeBag: disposeBag),
+                        hint: L("Drag on screen to set the text recognition area position and size at once"))
+            card.addRow(label: L("Timeout"),
+                        control: makeOCRSwitchTimeoutField(action, disposeBag: disposeBag),
+                        hint: "이 시간 내에 매칭되지 않으면 이 액션을 건너뛰고 다음 액션으로 진행")
+            let triggersContainer = makeOCRSwitchTriggersContainer(action, disposeBag: disposeBag)
+            card.addRow(label: L("Triggers"),
+                        control: triggersContainer,
+                        hint: "인식되면 해당 플로우로 이동할 텍스트 목록 — 위에서부터 우선 순위. '전체 모드'는 모든 플로우 모드에서 매칭")
+            card.addRow(label: L("Preview"),
+                        control: makeActionSnapshotView(action, disposeBag: disposeBag),
+                        hint: "영역 지정 직후 캡처된 스캔 영역")
             cards.append(card)
 
         case .aiGen:
@@ -1053,6 +1081,191 @@ final class ActionDetailBuilder {
         }
         return field
     }
+
+    /// Mode dropdown at the top of the unified 글자인식 card. Toggles
+    /// the action's underlying type between `.ocr` (클릭) and
+    /// `.ocrSwitch` (플로우 이동), preserving as much of the user's
+    /// data as possible (the click action's search text becomes the
+    /// first trigger, and the first trigger's text becomes the click
+    /// action's search text on the reverse switch). Firing
+    /// `onActionTypeChanged` triggers a full detail-pane rebuild so
+    /// the type-specific rows below this dropdown reflect the new mode.
+    private func makeOCRModePopup(_ action: AutoAction,
+                                  disposeBag: DisposeBag) -> NSView {
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.addItems(withTitles: [L("Click"), L("Go to Flow")])
+        if case .ocrSwitch = action.type {
+            popup.selectItem(at: 1)
+        } else {
+            popup.selectItem(at: 0)
+        }
+        popup.translatesAutoresizingMaskIntoConstraints = false
+
+        let bridge = OCRModePopupBridge(action: action) { [weak self] in
+            self?.onActionTypeChanged?()
+        }
+        popup.target = bridge
+        popup.action = #selector(OCRModePopupBridge.changed(_:))
+        objc_setAssociatedObject(popup, &Self.ocrModePopupBridgeAssocKey,
+                                 bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        return popup
+    }
+
+    private static var ocrModePopupBridgeAssocKey: UInt8 = 0
+
+    /// Numeric field + 초/분 popup for the `.ocrSwitch` overall
+    /// timeout. When the timeout elapses without a match the runner
+    /// just moves on to the next action — same fall-through behaviour
+    /// as `.ocr`.
+    private func makeOCRSwitchTimeoutField(_ action: AutoAction,
+                                           disposeBag: DisposeBag) -> NSView {
+        return makeOCRSwitchTimeField(
+            disposeBag: disposeBag,
+            initialSeconds: action.ocrSwitchTimeout,
+            initialIsMinutes: action.ocrSwitchTimeoutIsMinutes,
+            defaultSeconds: OCRSwitchPayload.defaultTimeout,
+            onValueChange: { [weak action] secs in action?.setOCRSwitchTimeout(secs) },
+            onUnitChange:  { [weak action] isMin in action?.setOCRSwitchTimeoutIsMinutes(isMin) }
+        )
+    }
+
+    /// Shared builder for the `.ocrSwitch` interval / timeout rows.
+    /// Each field has its own unit toggle so the two can be in different
+    /// units (typical use: 초 for interval, 분 for timeout) without
+    /// affecting the basic-delay popup.
+    private func makeOCRSwitchTimeField(disposeBag: DisposeBag,
+                                        initialSeconds: Double,
+                                        initialIsMinutes: Bool,
+                                        defaultSeconds: Double,
+                                        onValueChange: @escaping (Double) -> Void,
+                                        onUnitChange: @escaping (Bool) -> Void) -> NSView {
+        let initialFactor: Double = initialIsMinutes ? 60.0 : 1.0
+        let field = NSTextField(string: String(format: "%g", initialSeconds / initialFactor))
+        field.bezelStyle = .roundedBezel
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: 110).isActive = true
+
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.addItems(withTitles: ["초", "분"])
+        popup.translatesAutoresizingMaskIntoConstraints = false
+        popup.selectItem(at: initialIsMinutes ? 1 : 0)
+
+        field.delegate = TextFieldChangeDelegate.attach(to: field) { [weak popup] new in
+            let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
+            let display = Double(trimmed) ?? (defaultSeconds / (popup?.indexOfSelectedItem == 1 ? 60.0 : 1.0))
+            let factor: Double = popup?.indexOfSelectedItem == 1 ? 60.0 : 1.0
+            onValueChange(max(0, display * factor))
+        }
+
+        let popupBridge = OCRSwitchUnitBridge(field: field,
+                                              onUnit: onUnitChange,
+                                              onValueChange: onValueChange)
+        popup.target = popupBridge
+        popup.action = #selector(OCRSwitchUnitBridge.changed(_:))
+        objc_setAssociatedObject(popup, &Self.ocrSwitchUnitBridgeAssocKey,
+                                 popupBridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        let row = NSStackView(views: [field, popup])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 6
+        return row
+    }
+
+    private static var ocrSwitchUnitBridgeAssocKey: UInt8 = 0
+
+    /// Vertical container with one row per trigger plus an "Add" button at
+    /// the bottom. Each row is `[ text field | flow popup | mode popup |
+    /// delete button ]`. Rebuilds itself when triggers are added/removed
+    /// so layout stays compact.
+    private func makeOCRSwitchTriggersContainer(_ action: AutoAction,
+                                                disposeBag: DisposeBag) -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        // Seed at least one row so the user sees the editor shape.
+        if action.ocrSwitchTriggers.isEmpty {
+            action.appendOCRSwitchTrigger()
+        }
+
+        let state = OCRSwitchTriggersState(action: action, container: stack, builder: self)
+        objc_setAssociatedObject(stack, &Self.ocrSwitchTriggersStateAssocKey,
+                                 state, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        state.rebuild()
+        return stack
+    }
+
+    fileprivate func makeOCRSwitchTriggerRow(_ action: AutoAction,
+                                             index: Int,
+                                             onDelete: @escaping () -> Void) -> NSView {
+        let trigger = action.ocrSwitchTriggers.indices.contains(index)
+            ? action.ocrSwitchTriggers[index]
+            : OCRSwitchTrigger()
+
+        // Text field — the OCR target.
+        let textField = NSTextField(string: trigger.text)
+        textField.placeholderString = "예: 구매"
+        textField.bezelStyle = .roundedBezel
+        textField.translatesAutoresizingMaskIntoConstraints = false
+        textField.widthAnchor.constraint(equalToConstant: 130).isActive = true
+        textField.delegate = TextFieldChangeDelegate.attach(to: textField) { [weak action] new in
+            action?.updateOCRSwitchTrigger(at: index) { $0.text = new }
+        }
+
+        // Flow target popup — mirrors the .nextScenario popup style.
+        let flowButton = NSButton(title: "", target: nil, action: nil)
+        flowButton.bezelStyle = .roundRect
+        flowButton.alignment = .left
+        flowButton.translatesAutoresizingMaskIntoConstraints = false
+        flowButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 150).isActive = true
+        let flowBridge = OCRSwitchFlowPopupBridge(action: action,
+                                                  index: index,
+                                                  button: flowButton)
+        flowButton.target = flowBridge
+        flowButton.action = #selector(OCRSwitchFlowPopupBridge.buttonClicked(_:))
+        objc_setAssociatedObject(flowButton, &Self.ocrSwitchFlowBridgeAssocKey,
+                                 flowBridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        flowBridge.refreshTitle()
+
+        // Flow-mode popup — '전체 모드' + every known FlowMode.
+        let modeButton = NSButton(title: "", target: nil, action: nil)
+        modeButton.bezelStyle = .roundRect
+        modeButton.alignment = .left
+        modeButton.translatesAutoresizingMaskIntoConstraints = false
+        modeButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
+        let modeBridge = OCRSwitchModePopupBridge(action: action,
+                                                  index: index,
+                                                  button: modeButton)
+        modeButton.target = modeBridge
+        modeButton.action = #selector(OCRSwitchModePopupBridge.buttonClicked(_:))
+        objc_setAssociatedObject(modeButton, &Self.ocrSwitchModeBridgeAssocKey,
+                                 modeBridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        modeBridge.refreshTitle()
+
+        // Delete button.
+        let deleteButton = NSButton(title: "✕", target: nil, action: nil)
+        deleteButton.bezelStyle = .roundRect
+        deleteButton.controlSize = .small
+        let deleteBridge = ClosureButtonBridge { onDelete() }
+        deleteButton.target = deleteBridge
+        deleteButton.action = #selector(ClosureButtonBridge.fire)
+        objc_setAssociatedObject(deleteButton, &Self.ocrSwitchDeleteBridgeAssocKey,
+                                 deleteBridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        let row = NSStackView(views: [textField, flowButton, modeButton, deleteButton])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 6
+        return row
+    }
+
+    private static var ocrSwitchTriggersStateAssocKey: UInt8 = 0
+    private static var ocrSwitchFlowBridgeAssocKey: UInt8 = 0
+    private static var ocrSwitchModeBridgeAssocKey: UInt8 = 0
+    private static var ocrSwitchDeleteBridgeAssocKey: UInt8 = 0
 
     /// Numeric field for the `.aiGen` inter-iteration interval (seconds).
     /// Mirrors the layout of `makeDelayField`. Writes via
@@ -1930,7 +2143,7 @@ final class ActionDetailBuilder {
                                          nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
             }
             guard let action = action, let rect = quartzRect else {
-                AppLogger.shared.log("⎋ OCR 영역 선택 취소")
+                AppLogger.shared.log("⎋ 글자인식 영역 선택 취소")
                 return
             }
             // Snap dimensions to 25 px to match the slider grid; clamp to the
@@ -1960,7 +2173,7 @@ final class ActionDetailBuilder {
                     OCRSnapshotStore.shared.save(img, actionId: action.id)
                 }
             }
-            AppLogger.shared.log("🔲 OCR 영역 선택: 중심 (\(Int(center.x)), \(Int(center.y))) 크기 \(w)×\(h)")
+            AppLogger.shared.log("🔲 글자인식 영역 선택: 중심 (\(Int(center.x)), \(Int(center.y))) 크기 \(w)×\(h)")
         }
         controller.start()
         esc.start()
@@ -2310,7 +2523,10 @@ enum ActionIcons {
         case .wait(.click): names = ["hand.tap", "hand.tap.fill", "hourglass"]
         case .wait(.enter): names = ["hourglass.bottomhalf.filled", "hourglass"]
         case .wait(.time):  names = ["clock", "alarm"]
-        case .ocr:          names = ["text.viewfinder"]
+        // `.ocr` / `.ocrSwitch` are the click / flow-move modes of the
+        // unified 글자인식 action; same icon so the list cell + header
+        // pill don't churn when the user toggles the mode dropdown.
+        case .ocr, .ocrSwitch: names = ["text.viewfinder"]
         case .script:       names = ["curlybraces", "chevron.left.forwardslash.chevron.right"]
         case .setURL:       names = ["globe"]
         case .openChrome:   names = ["plus.rectangle.on.rectangle", "rectangle.on.rectangle"]
@@ -2340,6 +2556,7 @@ enum ActionIcons {
         case .wait(.enter):         return "⏎⏳"
         case .wait(.time):          return "⏱"
         case .ocr:                  return "🔍"
+        case .ocrSwitch:            return "🔍"
         case .script:               return "📝"
         case .setURL:               return "🌐"
         case .openChrome:           return "🆕"
@@ -2347,6 +2564,7 @@ enum ActionIcons {
         case .windowFrame:          return "🪟"
         case .nextScenario:         return "➡️"
         case .aiGen:                return "🤖"
+        case .ocrSwitch:            return "🔍➡️"
         }
     }
 
@@ -2359,7 +2577,9 @@ enum ActionIcons {
         case .wait(.click):         return L("Wait Click")
         case .wait(.enter):         return L("Wait Enter")
         case .wait(.time):          return L("Wait Time")
-        case .ocr:                  return L("OCR Click")
+        // Unified 글자인식 header — both modes share the same pill so
+        // it doesn't flicker when the user toggles the mode dropdown.
+        case .ocr, .ocrSwitch:      return L("Text Recognition")
         case .script:               return L("Run Script")
         case .setURL:               return L("URL Settings")
         case .openChrome:           return L("New Chrome Window")
@@ -3114,6 +3334,331 @@ private final class NextScenarioPopupBridge: NSObject {
                                       forModeId: modeId,
                                       defaultModeId: defaultModeId)
         refreshTitle()
+    }
+}
+
+/// Holds the per-trigger row views for an `.ocrSwitch` action's editor
+/// and rebuilds the row stack on add/delete. Kept anchored to the
+/// container view via associated object so the bridges/closures stay
+/// alive for the lifetime of the detail pane.
+private final class OCRSwitchTriggersState {
+    private weak var action: AutoAction?
+    private weak var container: NSStackView?
+    private weak var builder: ActionDetailBuilder?
+
+    init(action: AutoAction, container: NSStackView, builder: ActionDetailBuilder) {
+        self.action = action
+        self.container = container
+        self.builder = builder
+    }
+
+    func rebuild() {
+        guard let action = action,
+              let container = container,
+              let builder = builder else { return }
+        for v in container.arrangedSubviews {
+            container.removeArrangedSubview(v)
+            v.removeFromSuperview()
+        }
+        for (i, _) in action.ocrSwitchTriggers.enumerated() {
+            let row = builder.makeOCRSwitchTriggerRow(action, index: i) { [weak self] in
+                self?.action?.removeOCRSwitchTrigger(at: i)
+                self?.rebuild()
+            }
+            container.addArrangedSubview(row)
+        }
+
+        let addButton = NSButton(title: "＋ \(NSLocalizedString("Add Trigger", comment: ""))",
+                                 target: nil, action: nil)
+        addButton.bezelStyle = .roundRect
+        addButton.controlSize = .small
+        let addBridge = ClosureButtonBridge { [weak self] in
+            self?.action?.appendOCRSwitchTrigger()
+            self?.rebuild()
+        }
+        addButton.target = addBridge
+        addButton.action = #selector(ClosureButtonBridge.fire)
+        objc_setAssociatedObject(addButton, &Self.addBridgeAssocKey,
+                                 addBridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        container.addArrangedSubview(addButton)
+    }
+
+    private static var addBridgeAssocKey: UInt8 = 0
+}
+
+/// Per-row popup for the trigger's target flow. Menu shows "No Movement"
+/// plus the full scenario tree (groups become submenus), mirroring the
+/// `.nextScenario` popup. Writes via `updateOCRSwitchTrigger`.
+private final class OCRSwitchFlowPopupBridge: NSObject {
+    private weak var action: AutoAction?
+    private let index: Int
+    private let button: NSButton
+
+    init(action: AutoAction, index: Int, button: NSButton) {
+        self.action = action
+        self.index = index
+        self.button = button
+    }
+
+    func refreshTitle() {
+        let target = currentTarget()
+        button.title = label(for: target)
+    }
+
+    @objc func buttonClicked(_ sender: NSButton) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        let noMovement = NSMenuItem(title: NSLocalizedString("No Movement", comment: ""),
+                                    action: #selector(pickNoMovement(_:)),
+                                    keyEquivalent: "")
+        noMovement.target = self
+        menu.addItem(noMovement)
+
+        let store = ScenarioStore.shared
+        if !store.tree.isEmpty {
+            menu.addItem(.separator())
+        }
+        for node in store.tree {
+            switch node {
+            case .scenario(let s):
+                menu.addItem(makeScenarioItem(s))
+            case .group(let g):
+                let groupItem = NSMenuItem(title: g.name, action: nil, keyEquivalent: "")
+                let sub = NSMenu(title: g.name)
+                if g.scenarios.isEmpty {
+                    let empty = NSMenuItem(title: NSLocalizedString("(empty)", comment: ""),
+                                           action: nil, keyEquivalent: "")
+                    empty.isEnabled = false
+                    sub.addItem(empty)
+                } else {
+                    for s in g.scenarios {
+                        sub.addItem(makeScenarioItem(s))
+                    }
+                }
+                groupItem.submenu = sub
+                menu.addItem(groupItem)
+            }
+        }
+
+        markSelected(in: menu)
+        let origin = NSPoint(x: 0, y: sender.bounds.height + 4)
+        menu.popUp(positioning: nil, at: origin, in: sender)
+    }
+
+    private func makeScenarioItem(_ s: Scenario) -> NSMenuItem {
+        let item = NSMenuItem(title: s.name,
+                              action: #selector(pickScenario(_:)),
+                              keyEquivalent: "")
+        item.target = self
+        item.representedObject = s.id.uuidString
+        return item
+    }
+
+    private func markSelected(in menu: NSMenu) {
+        let cur = currentTarget()
+        for item in menu.items {
+            if let sub = item.submenu {
+                for child in sub.items where matches(child, target: cur) {
+                    child.state = .on
+                }
+            } else if matches(item, target: cur) {
+                item.state = .on
+            }
+        }
+    }
+
+    private func matches(_ item: NSMenuItem, target: String) -> Bool {
+        if target.isEmpty {
+            return item.action == #selector(pickNoMovement(_:))
+        }
+        return (item.representedObject as? String) == target
+    }
+
+    private func currentTarget() -> String {
+        guard let action = action,
+              action.ocrSwitchTriggers.indices.contains(index) else { return "" }
+        return action.ocrSwitchTriggers[index].targetFlowId
+    }
+
+    private func label(for target: String) -> String {
+        if target.isEmpty {
+            return NSLocalizedString("No Movement", comment: "")
+        }
+        if let s = ScenarioStore.shared.scenarios.first(where: { $0.id.uuidString == target }) {
+            return s.name
+        }
+        return NSLocalizedString("No Movement", comment: "")
+    }
+
+    @objc private func pickNoMovement(_ sender: Any?) { apply("") }
+    @objc private func pickScenario(_ sender: NSMenuItem) {
+        apply((sender.representedObject as? String) ?? "")
+    }
+
+    private func apply(_ target: String) {
+        action?.updateOCRSwitchTrigger(at: index) { $0.targetFlowId = target }
+        refreshTitle()
+    }
+}
+
+/// Per-row popup for the trigger's required FlowMode. Empty selection =
+/// '전체 모드' (matches any active mode).
+private final class OCRSwitchModePopupBridge: NSObject {
+    private weak var action: AutoAction?
+    private let index: Int
+    private let button: NSButton
+
+    init(action: AutoAction, index: Int, button: NSButton) {
+        self.action = action
+        self.index = index
+        self.button = button
+    }
+
+    func refreshTitle() {
+        let modeId = currentModeId()
+        button.title = label(for: modeId)
+    }
+
+    @objc func buttonClicked(_ sender: NSButton) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        let allMode = NSMenuItem(title: NSLocalizedString("All Modes", comment: ""),
+                                 action: #selector(pickAll(_:)),
+                                 keyEquivalent: "")
+        allMode.target = self
+        menu.addItem(allMode)
+
+        let modes = FlowModeStore.shared.flowModes
+        if !modes.isEmpty {
+            menu.addItem(.separator())
+        }
+        for mode in modes {
+            let item = NSMenuItem(title: mode.name,
+                                  action: #selector(pickMode(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = mode.id.uuidString
+            menu.addItem(item)
+        }
+
+        markSelected(in: menu)
+        let origin = NSPoint(x: 0, y: sender.bounds.height + 4)
+        menu.popUp(positioning: nil, at: origin, in: sender)
+    }
+
+    private func markSelected(in menu: NSMenu) {
+        let cur = currentModeId()
+        for item in menu.items {
+            if cur.isEmpty {
+                if item.action == #selector(pickAll(_:)) { item.state = .on }
+            } else if (item.representedObject as? String) == cur {
+                item.state = .on
+            }
+        }
+    }
+
+    private func currentModeId() -> String {
+        guard let action = action,
+              action.ocrSwitchTriggers.indices.contains(index) else { return "" }
+        return action.ocrSwitchTriggers[index].flowModeId
+    }
+
+    private func label(for modeId: String) -> String {
+        if modeId.isEmpty {
+            return NSLocalizedString("All Modes", comment: "")
+        }
+        if let mode = FlowModeStore.shared.flowModes.first(where: { $0.id.uuidString == modeId }) {
+            return mode.name
+        }
+        // Stale id — fall back to "All Modes" so the user notices the dangling reference.
+        return NSLocalizedString("All Modes", comment: "")
+    }
+
+    @objc private func pickAll(_ sender: Any?) { apply("") }
+    @objc private func pickMode(_ sender: NSMenuItem) {
+        apply((sender.representedObject as? String) ?? "")
+    }
+
+    private func apply(_ modeId: String) {
+        action?.updateOCRSwitchTrigger(at: index) { $0.flowModeId = modeId }
+        refreshTitle()
+    }
+}
+
+/// Tiny NSObject wrapper so plain closures can be wired as a button's
+/// target/action without the caller having to keep its own bridge class
+/// alive.
+final class ClosureButtonBridge: NSObject {
+    private let action: () -> Void
+    init(_ action: @escaping () -> Void) { self.action = action }
+    @objc func fire() { action() }
+}
+
+/// Top-of-card mode toggle for the unified 글자인식 action. Index 0 =
+/// 클릭 (`.ocr`), index 1 = 플로우 이동 (`.ocrSwitch`). Calls the
+/// action's mode-conversion helpers so data is preserved across the
+/// flip, then invokes `onChange` so the owning ActionDetailBuilder can
+/// rebuild the detail pane.
+private final class OCRModePopupBridge: NSObject {
+    private weak var action: AutoAction?
+    private let onChange: () -> Void
+    init(action: AutoAction, onChange: @escaping () -> Void) {
+        self.action = action
+        self.onChange = onChange
+    }
+
+    @objc func changed(_ sender: NSPopUpButton) {
+        guard let action = action else { return }
+        let wantsSwitch = sender.indexOfSelectedItem == 1
+        switch action.type {
+        case .ocr where wantsSwitch:        action.convertToOCRSwitchMode()
+        case .ocrSwitch where !wantsSwitch: action.convertToOCRClickMode()
+        default:                            return  // already in the desired mode
+        }
+        // Persist the new text (which lives in ActionStore SQLite) AND
+        // the new ActionType (which lives in scenarios.json via the
+        // tree). ActionStore.save() doesn't store the type, so we also
+        // need ScenarioStore.save() to flush the tree to disk.
+        action.save()
+        ScenarioStore.shared.save()
+        onChange()
+    }
+}
+
+/// 초/분 popup bridge for the `.ocrSwitch` interval & timeout fields.
+/// On toggle, rewrites the field's visible value into the new unit (so
+/// the displayed number stays anchored to the stored seconds value) and
+/// reports the new unit + the equivalent seconds to the owning action
+/// through callbacks.
+private final class OCRSwitchUnitBridge: NSObject {
+    private weak var field: NSTextField?
+    private let onUnit: (Bool) -> Void
+    private let onValueChange: (Double) -> Void
+
+    init(field: NSTextField,
+         onUnit: @escaping (Bool) -> Void,
+         onValueChange: @escaping (Double) -> Void) {
+        self.field = field
+        self.onUnit = onUnit
+        self.onValueChange = onValueChange
+    }
+
+    @objc func changed(_ sender: NSPopUpButton) {
+        let isMinutes = sender.indexOfSelectedItem == 1
+        let factor: Double = isMinutes ? 60.0 : 1.0
+        // The field currently shows a number expressed in the OLD unit;
+        // convert it to seconds, persist seconds, then re-render the
+        // field in the NEW unit so the visible value stays consistent.
+        let oldFactor: Double = isMinutes ? 1.0 : 60.0
+        let displayed = Double(field?.stringValue ?? "0") ?? 0
+        let seconds = max(0, displayed * oldFactor)
+        onUnit(isMinutes)
+        onValueChange(seconds)
+        if let field = field {
+            field.stringValue = String(format: "%g", seconds / factor)
+        }
     }
 }
 

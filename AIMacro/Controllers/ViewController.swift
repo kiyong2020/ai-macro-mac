@@ -302,6 +302,17 @@ class ViewController: NSViewController {
             self?.tableView.reloadData()
             self?.undoCoordinator.captureIfChanged()
         }
+
+        // Mode dropdown changed the action's type (e.g. 글자인식 클릭
+        // ↔ 플로우 이동). Full detail-pane rebuild so type-specific rows
+        // reflect the new mode. Don't `reloadData()` the table: the
+        // shared 글자인식 icon + the action's own name don't change with
+        // the mode toggle, and a full reload would clear the selection
+        // and blank the detail pane.
+        detailBuilder.onActionTypeChanged = { [weak self] in
+            self?.refreshDetailPane()
+            self?.undoCoordinator.captureIfChanged()
+        }
     }
 
     /// Mount the form for the currently-selected action (or the empty state).
@@ -1255,7 +1266,9 @@ class ViewController: NSViewController {
             // 통합 대기 — 디테일 패널에서 시간/클릭/엔터 중 선택. 신규 생성
             // 시 기본값은 시간 대기.
             (L("⏱  Wait"), .wait(type: .time)),
-            (L("🔍  OCR"), .ocr),
+            // 통합 글자인식 — 디테일 패널의 모드 드롭다운으로 '클릭' /
+            // '플로우 이동' 중 선택. 신규 생성 시 기본은 '클릭'.
+            (L("🔍  Text Recognition"), .ocr),
             (L("📝  Script"), .script(code: "")),
             // Hidden from the picker until needed again — `.setURL` /
             // `.openChrome` are Chrome-specific and superseded by `.openBrowser`.
@@ -1289,7 +1302,7 @@ class ViewController: NSViewController {
             (L("✋  Drag"), .drag),
             (L("⌨︎  Key"), .key),
             (L("⏱  Wait"), .wait(type: .time)),
-            (L("🔍  OCR"), .ocr),
+            (L("🔍  Text Recognition"), .ocr),
             (L("📝  Script"), .script(code: "")),
             (L("🌐🪟  Browser"), .openBrowser(url: "")),
             (L("🪟  Window Frame"), .windowFrame),
@@ -1431,7 +1444,8 @@ class ViewController: NSViewController {
             case .enter: name = "엔터대기"
             case .time:  name = "시간대기"; text = "09:00:00"
             }
-        case .ocr:                    name = "글자인식 클릭"; delay = max(0.5, userDefault); count = 200
+        case .ocr:                    name = "글자인식"; delay = max(0.5, userDefault); count = 200 * 10000 + 200
+        case .ocrSwitch:              name = "글자인식"; delay = max(0.3, userDefault); count = 200 * 10000 + 200
         case .script:                 name = "스크립트"
         case .setURL:                 name = "URL설정"
         case .openChrome:             name = "새창"

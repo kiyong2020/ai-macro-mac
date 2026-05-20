@@ -47,6 +47,13 @@ class AutoAction {
         /// 인코딩: point=영역 중심(Quartz), count=ocr 와 동일한 width*10000+height,
         /// text=사용자 지시문.
         case aiGen
+        /// 글자인식 전환: 지정된 영역을 일정 간격으로 스캔하여 등록된
+        /// 트리거 텍스트 중 하나가 인식되면 해당 플로우로 이동. 한
+        /// 액션에 여러 (텍스트, 대상 플로우, 필수 플로우 모드) 조합을
+        /// 저장할 수 있으며 플로우 모드가 비어 있으면 '전체 모드' —
+        /// 현재 실행 중인 모드와 무관하게 매칭. 인코딩: point/count 는
+        /// `.ocr` 와 동일, text 는 `OCRSwitchPayload` 형식.
+        case ocrSwitch
     }
 
     var disposeBag: DisposeBag = .init()
@@ -257,6 +264,7 @@ extension AutoAction {
         case .windowFrame:            return ["kind": "windowFrame"]
         case .nextScenario:           return ["kind": "nextScenario"]
         case .aiGen:                  return ["kind": "aiGen"]
+        case .ocrSwitch:              return ["kind": "ocrSwitch"]
         }
     }
 
@@ -279,6 +287,7 @@ extension AutoAction {
         case "windowFrame":  return .windowFrame
         case "nextScenario": return .nextScenario
         case "aiGen":        return .aiGen
+        case "ocrSwitch":    return .ocrSwitch
         default:            return nil
         }
     }
@@ -998,6 +1007,272 @@ extension AutoAction {
             p.delays.removeValue(forKey: modeId)
         }
         if !p.targets.isEmpty || !p.delays.isEmpty { p.legacyTarget = nil }
+        text.onNext(p.encode())
+    }
+}
+
+// MARK: - .ocrSwitch payload (triggers + interval + timeout)
+
+/// One trigger row inside an `.ocrSwitch` action.
+/// - `text`        — the target string Vision OCR should match against the
+///                   captured area.
+/// - `targetFlowId` — scenario UUID to switch to when this trigger fires.
+///                    Empty ⇒ "No Movement" (the trigger matches but the
+///                    runner moves on to the next action instead of
+///                    branching). Currently unused at runtime since an
+///                    empty target would mean the loop has nothing to do
+///                    on match; kept for future flexibility.
+/// - `flowModeId`  — when non-empty, the trigger only matches while the
+///                   run's active FlowMode equals this id. Empty ⇒ '전체
+///                   모드' (any mode). The default mode is the first entry
+///                   in `FlowModeStore.shared.flowModes`.
+struct OCRSwitchTrigger {
+    var text: String = ""
+    var targetFlowId: String = ""
+    /// Empty string represents '전체 모드' (matches any running mode).
+    var flowModeId: String = ""
+}
+
+/// `.ocrSwitch` packs three things into `action.text`:
+/// - inter-scan interval (seconds, default 1.0),
+/// - max wait timeout (seconds, default 30; the action gives up and
+///   continues with the next action when nothing matches in time),
+/// - an ordered list of triggers (text → target flow, optionally
+///   restricted to one flow mode).
+///
+/// Encoded as `@key=value` header lines at the top followed by one
+/// trigger per body line:
+/// ```
+/// @interval=1
+/// @timeout=30
+/// 구매||
+/// 관리|scenario-uuid|
+/// 결제|scenario-uuid|flowmode-uuid
+/// ```
+/// Trigger fields are pipe-separated; any field may be empty. Lines that
+/// fail to parse (no pipes) are skipped so legacy malformed payloads don't
+/// crash the action.
+struct OCRSwitchPayload {
+    static let defaultInterval: Double = 1.0
+    static let intervalRange: ClosedRange<Double> = 0.1 ... 60.0
+    /// Default timeout is 60 minutes (= 3600 seconds). Users typically
+    /// want long waits for state-machine-style branching, so the default
+    /// is much longer than a single OCR's 15s timeout.
+    static let defaultTimeout: Double = 3600.0
+    static let timeoutRange: ClosedRange<Double> = 1.0 ... 86400.0
+
+    var interval: Double = defaultInterval
+    var timeout: Double = defaultTimeout
+    /// UI-state only: whether the interval field renders/parses in minutes.
+    /// The stored `interval` value is always in seconds.
+    var intervalIsMinutes: Bool = false
+    /// UI-state only: whether the timeout field renders/parses in minutes.
+    /// The stored `timeout` value is always in seconds. Default is `true`
+    /// to match the long (60-minute) default timeout — showing 3600 in
+    /// 초 would be more confusing than 60 in 분.
+    var timeoutIsMinutes: Bool = true
+    var triggers: [OCRSwitchTrigger] = []
+
+    static func parse(_ raw: String) -> OCRSwitchPayload {
+        var p = OCRSwitchPayload()
+        let lines = raw.components(separatedBy: "\n")
+        var bodyStart = lines.count
+        headerLoop: for (i, line) in lines.enumerated() {
+            guard line.hasPrefix("@"),
+                  let eq = line.firstIndex(of: "="),
+                  eq > line.startIndex else {
+                bodyStart = i
+                break headerLoop
+            }
+            let key = String(line[line.index(after: line.startIndex) ..< eq])
+            let value = String(line[line.index(after: eq)...])
+            switch key {
+            case "interval":
+                if let n = Double(value) {
+                    p.interval = max(intervalRange.lowerBound,
+                                     min(intervalRange.upperBound, n))
+                }
+            case "timeout":
+                if let n = Double(value) {
+                    p.timeout = max(timeoutRange.lowerBound,
+                                    min(timeoutRange.upperBound, n))
+                }
+            case "intervalUnit":
+                p.intervalIsMinutes = (value == "min")
+            case "timeoutUnit":
+                p.timeoutIsMinutes = (value == "min")
+            default:
+                // Unknown header — keep this line as part of the body so
+                // users don't silently lose content.
+                bodyStart = i
+                break headerLoop
+            }
+            bodyStart = i + 1
+        }
+        for line in lines.dropFirst(bodyStart) {
+            if line.isEmpty { continue }
+            // Self-heal: an earlier buggy build wrote `@interval=…` /
+            // `@timeout=…` as triggers when their bodyStart calculation
+            // was off-by-one. Re-interpret any header-shaped line we see
+            // in the body as a header so the action recovers cleanly on
+            // the next save.
+            if line.hasPrefix("@"),
+               let eq = line.firstIndex(of: "="),
+               eq > line.startIndex {
+                let key = String(line[line.index(after: line.startIndex) ..< eq])
+                let after = String(line[line.index(after: eq)...])
+                let value = String(after.prefix(while: { $0 != "|" }))
+                if key == "interval", let n = Double(value) {
+                    p.interval = max(intervalRange.lowerBound,
+                                     min(intervalRange.upperBound, n))
+                    continue
+                }
+                if key == "timeout", let n = Double(value) {
+                    p.timeout = max(timeoutRange.lowerBound,
+                                    min(timeoutRange.upperBound, n))
+                    continue
+                }
+            }
+            // Three pipe-separated fields. Use omittingEmptySubsequences:false
+            // so trailing empty fields (no flowMode → "...||") survive.
+            let parts = line.split(separator: "|",
+                                   maxSplits: 2,
+                                   omittingEmptySubsequences: false)
+                .map(String.init)
+            guard parts.count >= 1 else { continue }
+            var t = OCRSwitchTrigger()
+            t.text = parts[0]
+            if parts.count >= 2 { t.targetFlowId = parts[1] }
+            if parts.count >= 3 { t.flowModeId = parts[2] }
+            p.triggers.append(t)
+        }
+        return p
+    }
+
+    func encode() -> String {
+        var lines: [String] = []
+        lines.append("@interval=\(formatNumber(interval))")
+        lines.append("@timeout=\(formatNumber(timeout))")
+        // Always emit unit headers so parsing stays unambiguous even
+        // when per-field defaults change (e.g. timeout default is 분).
+        lines.append("@intervalUnit=\(intervalIsMinutes ? "min" : "sec")")
+        lines.append("@timeoutUnit=\(timeoutIsMinutes ? "min" : "sec")")
+        for t in triggers {
+            // Sanitize embedded pipes/newlines so the line stays parseable.
+            let text = sanitize(t.text)
+            lines.append("\(text)|\(t.targetFlowId)|\(t.flowModeId)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func formatNumber(_ v: Double) -> String {
+        if v.truncatingRemainder(dividingBy: 1) == 0 {
+            return String(Int(v))
+        }
+        return String(format: "%g", v)
+    }
+
+    private func sanitize(_ s: String) -> String {
+        s.replacingOccurrences(of: "\r\n", with: " ")
+         .replacingOccurrences(of: "\n", with: " ")
+         .replacingOccurrences(of: "\r", with: " ")
+         .replacingOccurrences(of: "|", with: " ")
+    }
+}
+
+extension AutoAction {
+    var ocrSwitchPayload: OCRSwitchPayload {
+        OCRSwitchPayload.parse((try? text.value()) ?? "")
+    }
+
+    var ocrSwitchInterval: Double { ocrSwitchPayload.interval }
+    var ocrSwitchTimeout: Double { ocrSwitchPayload.timeout }
+    var ocrSwitchIntervalIsMinutes: Bool { ocrSwitchPayload.intervalIsMinutes }
+    var ocrSwitchTimeoutIsMinutes: Bool { ocrSwitchPayload.timeoutIsMinutes }
+    var ocrSwitchTriggers: [OCRSwitchTrigger] { ocrSwitchPayload.triggers }
+
+    func setOCRSwitchInterval(_ seconds: Double) {
+        var p = ocrSwitchPayload
+        p.interval = max(OCRSwitchPayload.intervalRange.lowerBound,
+                         min(OCRSwitchPayload.intervalRange.upperBound, seconds))
+        text.onNext(p.encode())
+    }
+
+    func setOCRSwitchTimeout(_ seconds: Double) {
+        var p = ocrSwitchPayload
+        p.timeout = max(OCRSwitchPayload.timeoutRange.lowerBound,
+                        min(OCRSwitchPayload.timeoutRange.upperBound, seconds))
+        text.onNext(p.encode())
+    }
+
+    func setOCRSwitchIntervalIsMinutes(_ isMinutes: Bool) {
+        var p = ocrSwitchPayload
+        p.intervalIsMinutes = isMinutes
+        text.onNext(p.encode())
+    }
+
+    func setOCRSwitchTimeoutIsMinutes(_ isMinutes: Bool) {
+        var p = ocrSwitchPayload
+        p.timeoutIsMinutes = isMinutes
+        text.onNext(p.encode())
+    }
+
+    func setOCRSwitchTriggers(_ triggers: [OCRSwitchTrigger]) {
+        var p = ocrSwitchPayload
+        p.triggers = triggers
+        text.onNext(p.encode())
+    }
+
+    /// Mutate a single trigger field in place. Pads the list if `index`
+    /// points past the end so callers can blindly write to a row they
+    /// just rendered without first growing the array.
+    func updateOCRSwitchTrigger(at index: Int,
+                                _ mutate: (inout OCRSwitchTrigger) -> Void) {
+        var triggers = ocrSwitchTriggers
+        while triggers.count <= index {
+            triggers.append(OCRSwitchTrigger())
+        }
+        mutate(&triggers[index])
+        setOCRSwitchTriggers(triggers)
+    }
+
+    func appendOCRSwitchTrigger(_ trigger: OCRSwitchTrigger = OCRSwitchTrigger()) {
+        var triggers = ocrSwitchTriggers
+        triggers.append(trigger)
+        setOCRSwitchTriggers(triggers)
+    }
+
+    func removeOCRSwitchTrigger(at index: Int) {
+        var triggers = ocrSwitchTriggers
+        guard triggers.indices.contains(index) else { return }
+        triggers.remove(at: index)
+        setOCRSwitchTriggers(triggers)
+    }
+
+    /// Mode switch helper for the unified 글자인식 action: convert this
+    /// action from `.ocrSwitch` to `.ocr`. Preserves the first trigger's
+    /// text as the new search text so the user doesn't have to retype.
+    /// Empty trigger list ⇒ blank search text. Caller must mutate
+    /// `action.type` after calling this (the type is not a BehaviorSubject
+    /// so we leave it to the caller to fire whatever UI refresh they need).
+    func convertToOCRClickMode() {
+        let firstText = ocrSwitchTriggers.first?.text ?? ""
+        type = .ocr
+        text.onNext(firstText)
+    }
+
+    /// Mode switch helper for the unified 글자인식 action: convert this
+    /// action from `.ocr` to `.ocrSwitch`. Promotes the current search
+    /// text into a single trigger so the user can immediately attach a
+    /// target flow. Empty search text ⇒ one empty trigger row (the
+    /// detail pane's auto-seed would have added one anyway).
+    func convertToOCRSwitchMode() {
+        let current = (try? text.value()) ?? ""
+        var p = OCRSwitchPayload()
+        var trigger = OCRSwitchTrigger()
+        trigger.text = current
+        p.triggers.append(trigger)
+        type = .ocrSwitch
         text.onNext(p.encode())
     }
 }

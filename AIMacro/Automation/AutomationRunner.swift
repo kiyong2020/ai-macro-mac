@@ -216,6 +216,7 @@ final class AutomationRunner {
         case .windowFrame:             try await runWindowFrame(action)
         case .nextScenario:            runNextScenario(action)
         case .aiGen:                   try await runAIGen(action)
+        case .ocrSwitch:               try await runOCRSwitch(action)
         }
     }
 
@@ -604,7 +605,7 @@ final class AutomationRunner {
         while !done && elapsedMs < timeoutMs {
             guard let shot = await ScreenCapturer.captureOnce(rect: captureRectNS) else {
                 OCRDebugWindow.shared.showError("화면 캡처 실패. 좌표가 현재 모니터 범위를 벗어났을 수 있습니다 — 위치를 다시 지정해보세요.")
-                AppLogger.shared.log("⚠️ OCR 캡처 실패 — 액션 건너뜀")
+                AppLogger.shared.log("⚠️ 글자인식 캡처 실패 — 액션 건너뜀")
                 return
             }
             if done { break }
@@ -624,7 +625,7 @@ final class AutomationRunner {
             if done { break }
 
             let scanned = observations.compactMap { $0.candidates.first }.joined(separator: " | ")
-            AppLogger.shared.log("OCR 스캔: [\(scanned)]")
+            AppLogger.shared.log("글자인식 스캔: [\(scanned)]")
 
             // Build the candidate pool: every top-N reading of every
             // observation, plus same-row neighbour pairs/triples concatenated
@@ -648,7 +649,7 @@ final class AutomationRunner {
                 )
                 let clickCount = max(1, (try? action.clicks.value()) ?? 1)
                 let scorePct = String(format: "%.2f", best.score)
-                AppLogger.shared.log("OCR '\(text)' 찾음 (유사도 \(scorePct), '\(best.text)') → 클릭: \(clickPoint) × \(clickCount)")
+                AppLogger.shared.log("글자인식 '\(text)' 찾음 (유사도 \(scorePct), '\(best.text)') → 클릭: \(clickPoint) × \(clickCount)")
                 for i in 0 ..< clickCount {
                     await click(at: clickPoint)
                     if i < clickCount - 1 {
@@ -663,8 +664,142 @@ final class AutomationRunner {
         }
 
         if !done {
-            AppLogger.shared.log("⏱ OCR '\(text)' \(timeoutMs/1000)초 내 미발견 — 액션 건너뜀")
+            AppLogger.shared.log("⏱ 글자인식 '\(text)' \(timeoutMs/1000)초 내 미발견 — 액션 건너뜀")
         }
+    }
+
+    /// `.ocrSwitch`: poll a scan area at the configured interval. Each
+    /// scan runs Vision OCR and compares every recognised string against
+    /// the trigger list. A trigger matches when (a) its required FlowMode
+    /// is empty (전체 모드) or equals the current running mode, and (b)
+    /// its text scores above `Constants.ocrMatchThreshold`. The first
+    /// matching trigger sets `nextScenarioRequest` so the run loop
+    /// short-circuits and the view controller switches scenarios. On
+    /// timeout the action simply ends and the runner continues with the
+    /// next action — same as `.ocr` when its target word never appears.
+    private func runOCRSwitch(_ action: AutoAction) async throws {
+        let payload = action.ocrSwitchPayload
+        let triggers = payload.triggers.filter { !$0.text.isEmpty }
+        guard !triggers.isEmpty else {
+            AppLogger.shared.log("⚠️ 글자인식 전환 — 트리거가 비어있음")
+            return
+        }
+        let center = (try? action.point.value()) ?? .zero
+        let scanSize = action.ocrScanSize
+        guard scanSize.width > 0, scanSize.height > 0 else {
+            AppLogger.shared.log("⚠️ 글자인식 전환 — 스캔 영역 미설정")
+            return
+        }
+        let primaryH = NSScreen.main?.frame.height ?? 0
+        let captureRectNS = CGRect(
+            x: center.x - scanSize.width / 2,
+            y: (primaryH - center.y) - scanSize.height / 2,
+            width: scanSize.width,
+            height: scanSize.height
+        )
+
+        // Triggers eligible for the current run. Empty flowModeId =
+        // 전체 모드 → always eligible. Filtering once up-front means
+        // the per-iteration loop only walks rows the runner could
+        // possibly fire.
+        let runningModeId = currentFlowModeId ?? ""
+        let activeTriggers = triggers.filter {
+            $0.flowModeId.isEmpty || $0.flowModeId == runningModeId
+        }
+        guard !activeTriggers.isEmpty else {
+            AppLogger.shared.log("⚠️ 글자인식 전환 — 현재 모드에 매칭되는 트리거 없음 — 건너뜀")
+            return
+        }
+        // Register every trigger text as a Vision custom word so Hangul
+        // candidates aren't garbled (same trick `runOCR` uses).
+        let customWords = activeTriggers.map { $0.text }
+
+        // Debug overlay: show the union of all trigger texts so the user
+        // can see what we're trying to match against.
+        let debugTarget = customWords.joined(separator: " | ")
+        OCRDebugWindow.shared.show(target: debugTarget)
+        defer { OCRDebugWindow.shared.hide() }
+
+        let timeoutMs = max(0, Int(payload.timeout * 1000))
+        // 스캔 간격은 항상 1초로 고정 — 사용자 입력 항목 제거됨.
+        let intervalMs = 1000
+        var elapsedMs = 0
+        AppLogger.shared.log("🔁 글자인식 전환 시작 (타임아웃 \(String(format: "%g", payload.timeout))s, 트리거 \(activeTriggers.count)개)")
+
+        while elapsedMs < timeoutMs {
+            guard let shot = await ScreenCapturer.captureOnce(rect: captureRectNS) else {
+                OCRDebugWindow.shared.showError("화면 캡처 실패. 좌표가 현재 모니터 범위를 벗어났을 수 있습니다 — 위치를 다시 지정해보세요.")
+                AppLogger.shared.log("⚠️ 글자인식 전환 — 캡처 실패, 종료")
+                return
+            }
+            let cgImg = shot.image
+            let img = NSImage(cgImage: cgImg, size: NSSize(width: cgImg.width, height: cgImg.height))
+
+            let observations: [OCRObservation] = await withCheckedContinuation { cont in
+                recognizeTextDetailed(from: cgImg, customWords: customWords, topN: 3) { cont.resume(returning: $0) }
+            }
+            let scanned = observations.compactMap { $0.candidates.first }.joined(separator: " | ")
+            AppLogger.shared.log("글자인식 전환 스캔: [\(scanned)]")
+
+            // For each trigger, score the OCR pool independently and keep
+            // the best match across all triggers. Earlier rows win ties so
+            // the user can prioritise triggers by ordering them.
+            var bestTriggerIndex: Int?
+            var bestScore: Double = 0
+            var bestText: String = ""
+            var bestBox: CGRect = .zero
+            var debugResults: [OCRDebugWindow.ScoredResult] = []
+            for (i, trigger) in activeTriggers.enumerated() {
+                let scored = scoreObservations(observations, target: trigger.text)
+                guard let top = scored.max(by: { $0.score < $1.score }) else { continue }
+                if top.score > bestScore {
+                    bestScore = top.score
+                    bestTriggerIndex = i
+                    bestText = top.text
+                    bestBox = top.box
+                }
+                // Surface every trigger's top candidate in the debug
+                // overlay so the user can see which triggers were close.
+                debugResults.append(OCRDebugWindow.ScoredResult(
+                    text: "[\(trigger.text)] \(top.text)",
+                    box: top.box,
+                    score: top.score,
+                    isMatch: false,
+                    merged: top.merged
+                ))
+            }
+
+            // Mark the winner so the debug window highlights it like .ocr does.
+            if let idx = bestTriggerIndex,
+               bestScore >= Constants.ocrMatchThreshold,
+               debugResults.indices.contains(idx) {
+                let w = debugResults[idx]
+                debugResults[idx] = OCRDebugWindow.ScoredResult(
+                    text: w.text, box: w.box, score: w.score,
+                    isMatch: true, merged: w.merged
+                )
+            }
+            OCRDebugWindow.shared.updateScored(image: img,
+                                               results: debugResults,
+                                               target: debugTarget)
+
+            if let idx = bestTriggerIndex, bestScore >= Constants.ocrMatchThreshold {
+                let trigger = activeTriggers[idx]
+                let scorePct = String(format: "%.2f", bestScore)
+                _ = bestBox  // surfaced via debug window; runner has no click step
+                if trigger.targetFlowId.isEmpty {
+                    AppLogger.shared.log("➡️ 글자인식 전환 매칭 '\(trigger.text)' (유사도 \(scorePct), '\(bestText)') — 이동 안함")
+                } else {
+                    nextScenarioRequest = .specific(id: trigger.targetFlowId)
+                    AppLogger.shared.log("➡️ 글자인식 전환 매칭 '\(trigger.text)' (유사도 \(scorePct), '\(bestText)') → 플로우 \(trigger.targetFlowId)")
+                }
+                return
+            }
+
+            try await Task.sleep(for: .milliseconds(intervalMs))
+            elapsedMs += intervalMs
+        }
+        AppLogger.shared.log("⏱ 글자인식 전환 — \(Int(payload.timeout))초 내 매칭 없음, 건너뜀")
     }
 
     /// One scored candidate fed to the OCR matcher.

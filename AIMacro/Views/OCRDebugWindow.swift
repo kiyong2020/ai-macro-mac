@@ -16,7 +16,7 @@ final class OCRDebugWindow {
                          styleMask: [.titled, .closable, .resizable, .nonactivatingPanel],
                          backing: .buffered,
                          defer: false)
-        w.title = "OCR 디버그"
+        w.title = L("Text Recognition Debug")
         w.isReleasedWhenClosed = false
         w.level = .floating
         w.contentView = buildContent()
