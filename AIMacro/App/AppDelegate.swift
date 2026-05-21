@@ -21,6 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // before any storage singleton (ScenarioStore/ActionStore/OCRSnapshotStore)
         // touches the new path. Must run first.
         Self.migrateLegacyAppSupportIfNeeded()
+        Self.promptForServerSelection()
         Permissions.requestAll()
         wirePreferencesMenu()
         setupGlobalObservers()
@@ -408,6 +409,31 @@ final class PreviousAppTracker {
 }
 
 extension AppDelegate {
+    /// Modal alert at launch letting the user pick which ai-macro-api host to
+    /// hit (`devServerURL` vs `debugServerURL`). The result is written to
+    /// `Constants.baseServerURL`, which `ActionGenService` reads at request
+    /// time. Must run before any code that issues an `.aiGen` request.
+    /// Release builds skip the prompt and always use `devServerURL`.
+    static func promptForServerSelection() {
+        #if DEBUG
+        let alert = NSAlert()
+        alert.messageText = "서버 선택"
+        alert.informativeText = "사용할 ai-macro-api 서버를 선택하세요."
+        alert.addButton(withTitle: "Dev  (\(Constants.devServerURL))")
+        alert.addButton(withTitle: "Debug  (\(Constants.debugServerURL))")
+        let response = alert.runModal()
+        switch response {
+        case .alertSecondButtonReturn:
+            Constants.baseServerURL = Constants.debugServerURL
+        default:
+            Constants.baseServerURL = Constants.devServerURL
+        }
+        AppLogger.shared.log("[Server] 선택됨: \(Constants.baseServerURL)")
+        #else
+        Constants.baseServerURL = Constants.devServerURL
+        #endif
+    }
+
     /// One-time migration when the app was renamed from GolfReservation → AIMacro.
     /// Moves the legacy `Application Support/GolfReservation/` folder (scenarios.json,
     /// actions.sqlite3, snapshots/) to the new `AIMacro/` location so existing user

@@ -23,11 +23,14 @@ class Constants {
     /// while keeping unrelated text below the bar.
     static let ocrMatchThreshold: Double = 0.75
 
+    static let devServerURL = "http://mini.minseye.co.kr:3021"
+    static let debugServerURL = "http://192.168.0.117:3021"
+
     /// Base URL of the ai-macro-api server. The `.aiGen` action POSTs to
     /// `<baseServerURL>/generate-actions` to translate a captured screen
     /// region + instruction into a list of `AutoAction`s.
-//    static let baseServerURL = "http://127.0.0.1:3012"
-    static let baseServerURL = "http://mini.minseye.co.kr:3021"
+    /// Mutable: chosen at launch via the server-selection popup in AppDelegate.
+    static var baseServerURL = devServerURL
 
 //     static let test : [AutoAction] = [
 //         .init(type: .click, group: "seonam", name: "화면클릭", point: .zero, delay: 0.01),
