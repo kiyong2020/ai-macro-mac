@@ -400,14 +400,19 @@ extension AutoAction {
 
 // MARK: - .aiGen payload (instruction + loop interval + end condition)
 
-/// `.aiGen` packs three things into `action.text`:
+/// `.aiGen` packs four things into `action.text`:
 /// - the natural-language instruction (free-form user text),
 /// - an optional inter-iteration interval (seconds) for the multi-turn loop,
 /// - an optional end condition (single-line) — when present, the runner
 ///   keeps calling `/generate-actions` until the model reports the
 ///   condition is satisfied; when empty, the runner makes exactly one call,
 /// - an optional `allowedKinds` subset that restricts which action kinds
-///   the server may emit.
+///   the server may emit,
+/// - an optional continuous-drag flag — when set, the runner presses
+///   `leftMouseDown` once at the action's `point` before the first turn
+///   and holds it across every generated `.drag` (each drag emits only
+///   `leftMouseDragged` events) until the loop exits, ensuring the
+///   gesture is one uninterrupted press for puzzles that require it.
 ///
 /// Encoded as zero-or-more `@key=value` header lines at the top followed
 /// by the instruction body:
@@ -415,6 +420,7 @@ extension AutoAction {
 /// @interval=2.0
 /// @end=로그인 화면이 보이면 종료
 /// @allowed=click,drag,scroll,nextScenario
+/// @continuousDrag=true
 /// 로그인 버튼을 클릭
 /// ```
 /// Headers may appear in any order. Lines that don't match `@key=value`
@@ -432,6 +438,11 @@ struct AIGenPayload {
     /// `nil` ⇒ no `@allowed` header — server uses its default kind set.
     /// Non-nil (possibly empty) ⇒ user explicitly restricted the kinds.
     var allowedKinds: Set<ActionGenService.AllowedKind>?
+    /// `true` ⇒ runner holds the left button down across the entire
+    /// `.aiGen` loop. Generated `.drag` actions emit `leftMouseDragged`
+    /// only; the press happens at `action.point` on entry and release
+    /// happens on any exit (finish, max-iter, error, cancel, Stop).
+    var continuousDrag: Bool = false
 
     static func parse(_ raw: String) -> AIGenPayload {
         var payload = AIGenPayload()
@@ -457,6 +468,8 @@ struct AIGenPayload {
                         ActionGenService.AllowedKind(rawValue: String($0).trimmingCharacters(in: .whitespaces))
                     }
                 )
+            case "continuousDrag":
+                payload.continuousDrag = (value.lowercased() == "true")
             default:
                 // Unknown header — stop parsing and treat as body so we
                 // don't silently swallow content the user typed.
@@ -489,6 +502,9 @@ struct AIGenPayload {
                 .map { $0.rawValue }
                 .joined(separator: ",")
             lines.append("@allowed=\(values)")
+        }
+        if continuousDrag {
+            lines.append("@continuousDrag=true")
         }
         lines.append(instruction)
         return lines.joined(separator: "\n")
@@ -559,6 +575,18 @@ extension AutoAction {
     func setAIGenAllowedKinds(_ kinds: Set<ActionGenService.AllowedKind>?) {
         var p = AIGenPayload.parse((try? text.value()) ?? "")
         p.allowedKinds = kinds
+        text.onNext(p.encode())
+    }
+
+    /// Hold the left mouse button down across every generated `.drag`
+    /// in this `.aiGen` loop. `false` ⇒ default per-drag down/up cycle.
+    var aiGenContinuousDrag: Bool {
+        AIGenPayload.parse((try? text.value()) ?? "").continuousDrag
+    }
+
+    func setAIGenContinuousDrag(_ on: Bool) {
+        var p = AIGenPayload.parse((try? text.value()) ?? "")
+        p.continuousDrag = on
         text.onNext(p.encode())
     }
 }

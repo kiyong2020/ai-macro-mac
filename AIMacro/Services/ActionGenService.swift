@@ -143,7 +143,8 @@ final class ActionGenService {
                   scenarios: [ScenarioInfo] = [],
                   currentScenarioId: String? = nil,
                   allowedKinds: Set<AllowedKind>? = nil,
-                  conversationHistory: [[String: Any]] = []) async throws -> GenerateResult {
+                  conversationHistory: [[String: Any]] = [],
+                  continuousDrag: Bool = false) async throws -> GenerateResult {
         guard let pngData = pngData(from: image) else {
             throw GenerateError(message: "이미지 인코딩 실패")
         }
@@ -180,6 +181,9 @@ final class ActionGenService {
         }
         if !conversationHistory.isEmpty {
             body["conversation_history"] = conversationHistory.map { ["tool_use_input": $0] }
+        }
+        if continuousDrag {
+            body["continuous_drag"] = true
         }
 
         let reqId = String(UUID().uuidString.prefix(8))
@@ -280,7 +284,8 @@ final class ActionGenService {
             + "image_wh=\(body["image_wh"] ?? "?") "
             + "image_bytes=\(base64Size) "
             + "history=\(historyCount) "
-            + "allowed_kinds=[\(allowed)]"
+            + "allowed_kinds=[\(allowed)] "
+            + "continuous_drag=\(body["continuous_drag"] as? Bool ?? false)"
         let headerLines = headers.map { "  \($0.name): \($0.value)" }.joined(separator: "\n")
         print("""
         [ActionGen][\(reqId)] ⇢ \(ts) POST \(url)

@@ -22,6 +22,13 @@ final class AutomationRunner {
     /// text, the action times out with an empty scan).
     private var displaySleepAssertion: IOPMAssertionID = 0
 
+    /// True while an `.aiGen` action is running in continuous-drag mode
+    /// and the left mouse button is held down. `runDrag` checks this to
+    /// emit drag-only events; `stop()` and `runAIGen`'s defer release
+    /// the press. Idempotent — both flag clears are guarded.
+    private var aiGenDragHeld = false
+    private var aiGenLastDragPoint: CGPoint = .zero
+
     // MARK: - Public state for the UI
 
     /// Index of the currently-running action, or nil when idle.
@@ -89,7 +96,19 @@ final class AutomationRunner {
         mouseListener.stop()
         keyboardListener.stop()
         OCRDebugWindow.shared.hide()
+        releaseHeldDragIfNeeded()
         releaseDisplaySleepAssertion()
+    }
+
+    /// Release any continuous-drag press still held by the `.aiGen`
+    /// runner. Synchronous so `stop()` (also sync) can call it; idempotent
+    /// because both `stop()` and `runAIGen`'s defer may race after a Stop
+    /// click and only the first should post the `leftMouseUp`.
+    private func releaseHeldDragIfNeeded() {
+        guard aiGenDragHeld else { return }
+        releaseMouseUp(at: aiGenLastDragPoint)
+        aiGenDragHeld = false
+        AppLogger.shared.log("🤖 연속 드래그 종료")
     }
 
     private func acquireDisplaySleepAssertion() {
@@ -279,6 +298,20 @@ final class AutomationRunner {
             AppLogger.shared.log("🤖 AI 액션 시작 (지시문: \(instruction.prefix(40))…, 간격: \(String(format: "%g", action.aiGenInterval))s, 종료조건: \(endCondition.prefix(40)))")
         }
 
+        // Continuous-drag mode: press once at the capture center, hold for
+        // the entire loop, release on any exit. Generated `.drag` actions
+        // emit `leftMouseDragged` only (see `runDrag`). `defer` covers
+        // every `return`/`throw` path below, and `stop()` also releases
+        // synchronously so a user-initiated Stop doesn't leave the mouse
+        // pressed if Task cancellation hasn't propagated yet.
+        if action.aiGenContinuousDrag {
+            AppLogger.shared.log("🤖 연속 드래그 시작 — (\(Int(center.x)), \(Int(center.y)))에서 누름")
+            await pressMouseDown(at: center)
+            aiGenDragHeld = true
+            aiGenLastDragPoint = center
+        }
+        defer { releaseHeldDragIfNeeded() }
+
         // Replayed to the server on each iteration so Claude sees its own
         // prior decisions as conversation memory (better trajectory
         // consistency, less per-turn oscillation). Capped to the most
@@ -313,7 +346,8 @@ final class AutomationRunner {
                     scenarios: scenarios,
                     currentScenarioId: currentScenarioId,
                     allowedKinds: action.aiGenAllowedKinds ?? ActionGenService.AllowedKind.defaults,
-                    conversationHistory: conversationHistory
+                    conversationHistory: conversationHistory,
+                    continuousDrag: action.aiGenContinuousDrag
                 )
             } catch {
                 AppLogger.shared.log("⚠️ AI 액션 — 서버 호출 실패: \(error.localizedDescription)")
@@ -465,7 +499,16 @@ final class AutomationRunner {
         let start = try! action.point.value()
         let waypoints = action.dragWaypointsTimed
         for i in 0 ..< count {
-            await dragMove(start: start, waypoints: waypoints)
+            if aiGenDragHeld {
+                // Continuous-drag mode (set by `.aiGen`): button is
+                // already pressed from the loop's entry. Emit drag-only
+                // events and remember the end position for the final
+                // `leftMouseUp` issued when the loop exits.
+                await dragMoveContinuous(start: start, waypoints: waypoints)
+                aiGenLastDragPoint = waypoints.last?.point ?? start
+            } else {
+                await dragMove(start: start, waypoints: waypoints)
+            }
             if i < count - 1 {
                 try await Task.sleep(for: .milliseconds(100))
             }

@@ -346,6 +346,9 @@ final class ActionDetailBuilder {
             card.addRow(label: L("Allowed Actions"),
                         control: makeAIGenAllowedKindsField(action, disposeBag: disposeBag),
                         hint: "AI 가 생성할 수 있는 액션 종류를 제한 (모두 체크 = 제한 없음)")
+            card.addRow(label: L("Continuous Drag"),
+                        control: makeAIGenContinuousDragField(action, disposeBag: disposeBag),
+                        hint: "켜면 캡처 중심에서 한 번 마우스를 누른 뒤 종료 시까지 떼지 않음 — 매 턴 드래그가 끊기지 않는 연속 동작")
             card.addRow(label: L("Scan Area"),
                         control: makeOCRAreaPicker(action, disposeBag: disposeBag),
                         hint: "AI 가 분석할 화면 영역을 드래그로 지정")
@@ -1379,6 +1382,25 @@ final class ActionDetailBuilder {
         stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
         return stack
+    }
+
+    /// Single checkbox toggling `.aiGen`'s continuous-drag mode. Persists
+    /// through `setAIGenContinuousDrag` so the encoded header is updated
+    /// without disturbing the instruction body or other headers.
+    private func makeAIGenContinuousDragField(_ action: AutoAction,
+                                              disposeBag: DisposeBag) -> NSView {
+        let box = NSButton(checkboxWithTitle: "매 턴 드래그가 끊기지 않도록 마우스를 누른 채 유지",
+                           target: nil, action: nil)
+        box.state = action.aiGenContinuousDrag ? .on : .off
+        let bridge = CheckboxToggleBridge(checkbox: box) { [weak action] isOn in
+            action?.setAIGenContinuousDrag(isOn)
+        }
+        box.target = bridge
+        box.action = #selector(CheckboxToggleBridge.toggled)
+        objc_setAssociatedObject(box, &Self.checkboxBridgeAssocKey,
+                                 bridge, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        box.translatesAutoresizingMaskIntoConstraints = false
+        return box
     }
 
     private static var textViewBridgeAssocKey: UInt8 = 0

@@ -121,6 +121,51 @@ func dragMove(start: CGPoint, waypoints: [DragWaypoint]) async {
     lastSimulatedPosition = endPos
 }
 
+/// Press and hold the left mouse button at `point` without releasing.
+/// Caller is responsible for an eventual `releaseMouseUp(at:)` — pair
+/// with `dragMoveContinuous` for multi-segment drags whose pressed
+/// state spans more than one logical step. Used by `.aiGen`'s
+/// continuous-drag mode so one CAPTCHA-style drag can stretch across
+/// many model-emitted batches.
+func pressMouseDown(at point: CGPoint) async {
+    await simulateMouseMove(to: point)
+    let source = CGEventSource(stateID: .hidSystemState)
+    let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown,
+                       mouseCursorPosition: point, mouseButton: .left)
+    down?.setIntegerValueField(.mouseEventClickState, value: 1)
+    down?.post(tap: .cghidEventTap)
+    try? await Task.sleep(for: .milliseconds(30))
+    lastSimulatedPosition = point
+}
+
+/// Continue an in-progress drag started by `pressMouseDown(at:)`.
+/// Smoothly drags to `start`, then through `waypoints`, leaving the
+/// button pressed at the final position. No `leftMouseDown`/`Up` is
+/// emitted — that is the caller's responsibility.
+func dragMoveContinuous(start: CGPoint, waypoints: [DragWaypoint]) async {
+    await simulateMouseDrag(to: start)
+    let hasTiming = waypoints.contains { $0.tMs != DragWaypoint.legacyTMs }
+    if hasTiming {
+        await replayTimedDrag(waypoints: waypoints)
+    } else {
+        for wp in waypoints {
+            await simulateMouseDrag(to: wp.point)
+        }
+    }
+}
+
+/// Release a left-button press previously started by `pressMouseDown`.
+/// Synchronous: only posts a single CGEvent, so it's safe to call from
+/// `AutomationRunner.stop()` which is not async.
+func releaseMouseUp(at point: CGPoint) {
+    let source = CGEventSource(stateID: .hidSystemState)
+    let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp,
+                     mouseCursorPosition: point, mouseButton: .left)
+    up?.setIntegerValueField(.mouseEventClickState, value: 1)
+    up?.post(tap: .cghidEventTap)
+    lastSimulatedPosition = point
+}
+
 /// Literal replay: posts `.leftMouseDragged` at each recorded waypoint
 /// after sleeping the recorded inter-sample gap. With the recorder's
 /// 5 pt sampling, gaps are dense enough (~5–20 ms apart at normal speed)
